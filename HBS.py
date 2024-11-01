@@ -1,6 +1,6 @@
 import numpy as np
 import scipy.sparse as sp
-from scipy.sparse.linalg import LinearOperator, aslinearoperator
+from scipy.sparse.linalg import aslinearoperator as alo, factorized, LinearOperator
 
 
 class BlockMatrix(LinearOperator):
@@ -128,7 +128,7 @@ def random_access_greedy_alg(A: np.ndarray, level: int, r: int):
     return FourPartLens(U_l, A_lminus1, V_l, D_l)
     # return np.asarray(U_l @ A_lminus1 @ V_l.T + D_l)
     # below is nice and fast but to convert back to an array, must multiply with identity matrix
-    # return aslinearoperator(U_l) @ aslinearoperator(random_access_greedy_alg(np.asarray(U_l.T @ (A - D_l) @ V_l), level-1, r)) @ aslinearoperator(V_l).T + aslinearoperator(D_l)
+    # return alo(U_l) @ alo(random_access_greedy_alg(np.asarray(U_l.T @ (A - D_l) @ V_l), level-1, r)) @ alo(V_l).T + alo(D_l)
 
 
 def nullspace_basis(X):
@@ -191,7 +191,7 @@ def matvec_alg_resketch(A, level: int, r: int, num_sketches_per_level: int):
     Dpart1 = blockwise_right_pseudoinv(AOmega1 - U_l @ (U_l.T @ AOmega1), Omega1, level)
     Dpart2 = U_l @ (U_l.T @ blockwise_right_pseudoinv(ATOmega2 - V_l @ (V_l.T @ ATOmega2), Omega2, level).T)
     D_l = Dpart1 + Dpart2
-    A_lminus1 = matvec_alg_resketch(aslinearoperator(U_l).T @ (aslinearoperator(A) - aslinearoperator(D_l)) @ aslinearoperator(V_l), level-1, r, num_sketches_per_level)
+    A_lminus1 = matvec_alg_resketch(alo(U_l).T @ (alo(A) - alo(D_l)) @ alo(V_l), level-1, r, num_sketches_per_level)
     return FourPartLens(U_l, A_lminus1, V_l, D_l)
 
 
@@ -202,11 +202,23 @@ A_tilde = random_access_greedy_alg(A, 1, 3)
 np.linalg.norm(A - A_tilde.toarray(), np.inf)
 
 
+class SparseInverse(LinearOperator):
+    def __init__(self, A):
+        assert A.shape[0] == A.shape[1]
+        self.shape = A.shape
+        self.Ainv = factorized(A)
+        self.ATinv = factorized(A.T)
+
+    def _matvec(self, other): self.Ainv(other)
+    def _rmatvec(self, other): self.ATinv(other)
+
+
 order = 8
 N = 2**order
 num_diags_above = 1
 offsets = list(range(-num_diags_above, num_diags_above+1))
 banded = sp.diags_array([np.random.randn(N-abs(offset)) for offset in offsets], offsets=offsets)
+A = SparseInverse(banded)
 A = np.linalg.inv(banded.toarray())
 A_tilde = random_access_greedy_alg(A, order, 2*num_diags_above)
 print(np.linalg.norm(A - A_tilde.toarray(), np.inf))
@@ -222,3 +234,29 @@ A_tilde_matvec = matvec_alg_unified_sketch(A, order, 1, 3*(2*num_diags_above))
 print(np.linalg.norm(A - A_tilde_matvec.toarray(), np.inf))
 A_tilde_resketch = matvec_alg_resketch(A, order, 1, 3*(2*num_diags_above))
 print(np.linalg.norm(A - A_tilde_resketch.toarray(), np.inf))
+
+
+from itertools import accumulate, product
+import networkx as nx
+
+alo = alo
+N = 10
+levels = 6
+# this is dumb just use scipy builtins and then index into the nodes we want...
+G = nx.grid_2d_graph((2**levels)*N, (2**levels)*N)
+nodes1 = list(product(range(64*N), range(32*N)))
+nodes2 = list(product(range(64*N), range(32*N+1, 64*N)))
+nodes3 = list(product(range(64*N), [32*N]))
+M = nx.laplacian_matrix(G, nodes1 + nodes2 + nodes3)
+i1, i2, _ = accumulate(len(ni) for ni in [nodes1, nodes2, nodes3])
+C11 = M[:i1, :i1]
+C13 = M[:i1, i2:]
+C22 = M[i1:i2, i1:i2]
+C23 = M[i1:i2, i2:]
+C31 = M[i2:, :i1]
+C32 = M[i2:, i1:i2]
+C33 = M[i2:, i2:]
+A = alo(C33) - alo(C31) @ SparseInverse(C11) @ alo(C13) - alo(C32) @ SparseInverse(C22) @ alo(C23)
+
+A_tilde = matvec_alg_unified_sketch(A, levels, 30, 3*30)
+
