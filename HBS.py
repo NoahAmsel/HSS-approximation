@@ -1,6 +1,9 @@
+from itertools import product
+from joblib import Parallel, delayed
 import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import aslinearoperator as alo, factorized, LinearOperator
+from tqdm import tqdm
 
 
 class BlockMatrix(LinearOperator):
@@ -28,6 +31,7 @@ class Block22Matrix(LinearOperator):
     def _adjoint(self):
         pass
 
+# WRONG! I don't think this is actually what we want
 class BranchMatrix:
     def __init__(self, A11, B12, B21, A22):
         """All inputs should implement LinearOperator interface"""
@@ -40,7 +44,8 @@ class BranchMatrix:
     def _matmat(self, other):
         top_half = other[:self.A11.shape[1]]
         bottom_half = other[self.A11.shape[1]:]
-
+        out = np.concat([self.A11 @ top_half, self.A22 @ bottom_half])
+        self.B12 @ top_half.reshape(-1, 2).sum(axis=1)
 
 class HBS:
     def __init__(U, V, A: BranchMatrix):
@@ -73,10 +78,17 @@ def diagblock(A, level, block_i):
 # colblock_x_diag(A, 2, 2)
 
 
+    def __init__(self, A, dtype=None):
+        assert A.shape[0] == A.shape[1]
+        super().__init__(dtype, A.shape)
+        self.Ainv = factorized(A)
+        self.ATinv = factorized(A.T)
+        self._init_dtype()
+
 # Don't actually need this? just use regular arithmetic on LinearOperator's
-# But if we want to access the factors, 
+# But if we want to access the factors,
 class FourPartLens(LinearOperator):
-    def __init__(self, U, A, V, D):
+    def __init__(self, U, A, V, D, dtype=None):
         """
         A factorization of the form UAV^T + D.
         Assumes nothing about the four pieces other than:
@@ -92,10 +104,8 @@ class FourPartLens(LinearOperator):
         self.V = V
         self.A = A
         self.D = D
-
-    @property
-    def shape(self):
-        return self.D.shape
+        super().__init__(dtype, D.shape)
+        self._init_dtype()
 
     def _matmat(self, other):
         return self.U @ (self.A @ (self.V.T @ other)) + self.D @ other
@@ -113,7 +123,6 @@ class FourPartLens(LinearOperator):
     @property
     def size(self):
         return self.U.size + self.A.size + self.V.size + self.D.size
-
 
 
 def random_access_greedy_alg(A: np.ndarray, level: int, r: int):
@@ -156,6 +165,7 @@ def blockwise_right_pseudoinv(X, Y, level):
     """
     return sp.block_diag([right_pseudoinv(rowblock(X, level, block_i), rowblock(Y, level, block_i)) for block_i in range(2**level)])
 
+
 def matvec_alg_unified_sketch_helper(Omega1, AOmega1, Omega2, ATOmega2, level: int, r: int):
     if level == 0:
         # NOTE this isn't symmetric in approximate case
@@ -171,6 +181,7 @@ def matvec_alg_unified_sketch_helper(Omega1, AOmega1, Omega2, ATOmega2, level: i
     newATOmega2 = V_l.T @ (ATOmega2 - D_l.T @ Omega2)
     A_lminus1 = matvec_alg_unified_sketch_helper(newOmega1, newAOmega1, newOmega2, newATOmega2, level-1, r)
     return FourPartLens(U_l, A_lminus1, V_l, D_l)
+
 
 def matvec_alg_unified_sketch(A, level: int, r: int, num_sketches:int):
     left_Omega = np.random.randn(A.shape[0], num_sketches)
@@ -195,68 +206,133 @@ def matvec_alg_resketch(A, level: int, r: int, num_sketches_per_level: int):
     return FourPartLens(U_l, A_lminus1, V_l, D_l)
 
 
-
-N = 2**4; r = 3
-A = np.random.randn(N, r) @ np.random.randn(r, N)
-A_tilde = random_access_greedy_alg(A, 1, 3)
-np.linalg.norm(A - A_tilde.toarray(), np.inf)
-
-
 class SparseInverse(LinearOperator):
-    def __init__(self, A):
+    def __init__(self, A, dtype=None):
         assert A.shape[0] == A.shape[1]
-        self.shape = A.shape
+        super().__init__(dtype, A.shape)
+        # self.LU = sp.linalg.splu(A)  # TODO: get rid of below and just use this
         self.Ainv = factorized(A)
         self.ATinv = factorized(A.T)
+        self._init_dtype()
 
-    def _matvec(self, other): self.Ainv(other)
-    def _rmatvec(self, other): self.ATinv(other)
-
-
-order = 8
-N = 2**order
-num_diags_above = 1
-offsets = list(range(-num_diags_above, num_diags_above+1))
-banded = sp.diags_array([np.random.randn(N-abs(offset)) for offset in offsets], offsets=offsets)
-A = SparseInverse(banded)
-A = np.linalg.inv(banded.toarray())
-A_tilde = random_access_greedy_alg(A, order, 2*num_diags_above)
-print(np.linalg.norm(A - A_tilde.toarray(), np.inf))
-A_tilde_matvec = matvec_alg_unified_sketch(A, order, 2*num_diags_above, 3*(2*num_diags_above))
-print(np.linalg.norm(A - A_tilde_matvec.toarray(), np.inf))
-A_tilde_resketch = matvec_alg_resketch(A, order, 2*num_diags_above, 3*(2*num_diags_above))
-print(np.linalg.norm(A - A_tilde_resketch.toarray(), np.inf))
+    def _matmat(self, other): return self.Ainv(other)
+    def _rmatmat(self, other): return self.ATinv(other)
+    def toarray(self): return self @ np.eye(self.shape[0])
 
 
-A_tilde = random_access_greedy_alg(A, order, 1)
-print(np.linalg.norm(A - A_tilde.toarray(), np.inf))
-A_tilde_matvec = matvec_alg_unified_sketch(A, order, 1, 3*(2*num_diags_above))
-print(np.linalg.norm(A - A_tilde_matvec.toarray(), np.inf))
-A_tilde_resketch = matvec_alg_resketch(A, order, 1, 3*(2*num_diags_above))
-print(np.linalg.norm(A - A_tilde_resketch.toarray(), np.inf))
+def banded_gaussian(N, half_bandwidth):
+    offsets = list(range(-half_bandwidth, half_bandwidth+1))
+    return sp.diags_array([np.random.randn(N-abs(offset)) for offset in offsets], offsets=offsets)
 
 
-from itertools import accumulate, product
-import networkx as nx
+if False:
+    N = 2**4; r = 3
+    A = np.random.randn(N, r) @ np.random.randn(r, N)
+    A_tilde = random_access_greedy_alg(A, 1, 3)
+    np.linalg.norm(A - A_tilde.toarray(), np.inf)
 
-alo = alo
-N = 10
-levels = 6
-# this is dumb just use scipy builtins and then index into the nodes we want...
-G = nx.grid_2d_graph((2**levels)*N, (2**levels)*N)
-nodes1 = list(product(range(64*N), range(32*N)))
-nodes2 = list(product(range(64*N), range(32*N+1, 64*N)))
-nodes3 = list(product(range(64*N), [32*N]))
-M = nx.laplacian_matrix(G, nodes1 + nodes2 + nodes3)
-i1, i2, _ = accumulate(len(ni) for ni in [nodes1, nodes2, nodes3])
-C11 = M[:i1, :i1]
-C13 = M[:i1, i2:]
-C22 = M[i1:i2, i1:i2]
-C23 = M[i1:i2, i2:]
-C31 = M[i2:, :i1]
-C32 = M[i2:, i1:i2]
-C33 = M[i2:, i2:]
-A = alo(C33) - alo(C31) @ SparseInverse(C11) @ alo(C13) - alo(C32) @ SparseInverse(C22) @ alo(C23)
 
-A_tilde = matvec_alg_unified_sketch(A, levels, 30, 3*30)
+if False:
+    order = 8
+    num_diags_above = 1
+    A = SparseInverse(banded_gaussian(2**order, num_diags_above))
+    A_tilde = random_access_greedy_alg(A.toarray(), order, 2*num_diags_above)
+    print(np.linalg.norm(A.toarray() - A_tilde.toarray(), np.inf))
+    A_tilde_matvec = matvec_alg_unified_sketch(A, order, 2*num_diags_above, 3*(2*num_diags_above))
+    print(np.linalg.norm(A.toarray() - A_tilde_matvec.toarray(), np.inf))
+    A_tilde_resketch = matvec_alg_resketch(A, order, 2*num_diags_above, 3*(2*num_diags_above))
+    print(np.linalg.norm(A.toarray() - A_tilde_resketch.toarray(), np.inf))
 
+    # now with a too-small rank
+    A_tilde = random_access_greedy_alg(A, order, 1)
+    print(np.linalg.norm(A - A_tilde.toarray(), np.inf))
+    A_tilde_matvec = matvec_alg_unified_sketch(A, order, 1, 3*(2*num_diags_above))
+    print(np.linalg.norm(A - A_tilde_matvec.toarray(), np.inf))
+    A_tilde_resketch = matvec_alg_resketch(A, order, 1, 3*(2*num_diags_above))
+    print(np.linalg.norm(A - A_tilde_resketch.toarray(), np.inf))
+
+
+def grid_schur_complement(partitioned_grid_dimension, other_grid_dimension):
+    L = sp.linalg.LaplacianNd((partitioned_grid_dimension, other_grid_dimension), dtype=np.float64).tosparse()
+    j1 = other_grid_dimension * (partitioned_grid_dimension//2)
+    j2 = j1 + other_grid_dimension
+    C11 = L[:j1, :j1]
+    C13 = L[:j1, j1:j2]
+    C22 = L[j2:, j2:]
+    C23 = L[j2:, j1:j2]
+    C31 = L[j1:j2, :j1]
+    C32 = L[j1:j2, j2:]
+    C33 = L[j1:j2, j1:j2]
+    A = alo(C33) - alo(C31) @ SparseInverse(C11) @ alo(C13) - alo(C32) @ SparseInverse(C22) @ alo(C23)
+    return A
+
+
+def grid_schur_complement_(partitioned_grid_dimension, leaf_size, levels):
+    return grid_schur_complement(partitioned_grid_dimension, leaf_size*(2**levels))
+
+
+def approx_Frob(A, sketch_size):
+    return np.linalg.norm(A @ np.random.randn(A.shape[1], sketch_size), ord='fro') / np.sqrt(sketch_size)
+
+
+if __name__ == "__main__":
+    # Schur complement
+    # r = 30  # given in fig 7
+    # m = 2*r  # given in beginning of experiments section
+    # r = 10
+    # m = 16
+    # # s = max(r+m, 3*r)  # given in beginning of experiments section and beginning of sec. 4
+    # levels = 6
+    # n = 51
+    # A = grid_schur_complement_(n, m, levels)
+    # title = f"Grid Schur Complement:\nn={n},m={m},level={levels},r={r}"
+
+    # banded inverse
+    levels = 12
+    num_diags_above = 5
+    A = SparseInverse(banded_gaussian(2**levels, num_diags_above))
+    r = 8 #num_diags_above # true rank is 2*num_diags_above
+    title = f"Banded:\nnum_diag={num_diags_above},level={levels},r={r}"
+
+    methods = {
+        "fresh sketches": lambda s: matvec_alg_resketch(A, levels, r, s),
+        "one sketch": lambda s: matvec_alg_unified_sketch(A, levels, r, s),
+    }
+    def rel_error(A_tilde):
+        return approx_Frob(A_tilde - A, int(3e2)) / approx_Frob(A, int(3e2))
+    def datum(sketch_dim, method_name, method):
+        return dict(
+            sketch_dim=sketch_dim,
+            method=method_name,
+            relative_error=rel_error(method(sketch_dim)),
+        )
+    results = Parallel(n_jobs=1)(
+        delayed(datum)(sketch_dim, method_name, method)
+        for _, (method_name, method), sketch_dim in tqdm(list(product(range(1), methods.items(), [16, 32, 64, 128, 256])))
+    )
+    # random_err = rel_error(random_access_greedy_alg(A.toarray(), levels, r))
+    # results += [dict(sketch_dim=sketch_dim, method="random", relative_error=random_err,)
+    #     for sketch_dim in [16, 256]
+    # ]
+
+    import matplotlib.pyplot as plt
+    import pandas as pd
+    import seaborn as sns
+    df = pd.DataFrame(results)
+    df["total_sketching"] = df.apply(lambda x: x["sketch_dim"] * {"fresh sketches": levels, "one sketch": 1, "random": 1}[x["method"]], axis=1)
+    for i, x in enumerate(["sketch_dim", "total_sketching"]):
+        plt.figure()
+        ax = sns.lineplot(df, x=x, y="relative_error", hue="method", style="method", errorbar=("ci", 95), marker='o')
+        plt.xscale("log")
+        plt.yscale("log")
+        plt.title(title)
+        ax.get_figure().savefig(f"{title.replace("\n", "")}_{i}.png", dpi=400)
+
+# from joblib import load, dump, wrap_non_picklable_objects
+# filename = os.path.join('joblib_test.mmap')
+# _ = dump(wrap_non_picklable_objects(A), filename)
+# from scipy.sparse.linalg import SuperLU
+# SuperLU
+
+# sns.lineplot(df[df["sketch_dim"] > 8], x="sketch_dim", y="relative_error", hue="method", style="method", errorbar=("ci", 95), marker='o')
+# sns.lineplot(df[df["sketch_dim"] > 8], x="total_sketching", y="relative_error", hue="method", style="method", errorbar=("ci", 95), marker='o')
