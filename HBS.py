@@ -48,73 +48,16 @@ class Block22Matrix(VcatLinearOperator):
         super().__init__(HcatLinearOperator(A11, A12), HcatLinearOperator(A21, A22))
 
 
-class TiledMatrix(LinearOperator):
-    def __init__(self, A: LinearOperator, block_rows: int, block_cols: int):
-        self.A = A
-        self.block_rows = block_rows
-        self.block_cols = block_cols
-        super().__init__(None, (A.shape[0] * block_rows, A.shape[1] * block_cols))
-        self._init_dtype()
-
-    def _matmat(self, other):
-        # whoa this is dumb! TODO: improve this using einsum, etc
-        return self.toarray() @ other
-
-    def toarray(self):
-        return np.tile(self.A, (self.block_rows, self.block_cols))
-
-
-
-# class Block22Matrix(LinearOperator):
-#     def __init__(self, A11: LinearOperator, A12: LinearOperator, A21: LinearOperator, A22: LinearOperator):
-#         # assert A11.shape[0] + A21.shape[0] == A12.shape[0] + A22.shape[0]
-#         # assert A11.shape[1] + A12.shape[1] == A21.shape[1] + A22.shape[1]
-#         # Enforce that the block structure 
-#         assert A11.shape[0] == A12.shape[0]
-#         assert A21.shape[0] == A22.shape[0]
-#         assert A11.shape[1] == A21.shape[1]
-#         self.A11 = A11
-#         self.A12 = A12
-#         self.A21 = A21
-#         self.A22 = A22
-
-#     @property
-#     def shape(self):
-#         return (self.A11.shape[0] + self.A21.shape[0], self.A11.shape[1] + self.A12.shape[1])
-
-#     def _matmat(self, other):
-#         top_half = other[:self.A11.shape[1]]
-#         bottom_half = other[self.A11.shape[1]:]
-#         return self.A11 @ top_half + self
-
-#     def _adjoint(self):
-#         pass
-
-# # WRONG! I don't think this is actually what we want
-# class BranchMatrix:
-#     def __init__(self, A11, B12, B21, A22):
-#         """All inputs should implement LinearOperator interface"""
-#         self.A11 = A11
-#         self.B12 = B12
-#         self.B21 = B21
-#         self.A22 = A22
-#     # block with arbitrary A11 and A22, but A12 = [[1,1], [1,1]] \kron B12 and likewise A21 = [[1,1], [1,1]] \kron B21
-
-#     def _matmat(self, other):
-#         top_half = other[:self.A11.shape[1]]
-#         bottom_half = other[self.A11.shape[1]:]
-#         out = np.concat([self.A11 @ top_half, self.A22 @ bottom_half])
-#         self.B12 @ top_half.reshape(-1, 2).sum(axis=1)
-
-
 def rowblock_x_diag(A, level, block_i):
     blocksize = A.shape[0] // 2**level
     start = block_i * blocksize
     end = start + blocksize
     return A[start:end, np.r_[:start, end:A.shape[0]]]
 
+
 def colblock_x_diag(A, level, block_i):
     return rowblock_x_diag(A.T, level, block_i).T
+
 
 def diagblock(A, level, block_i):
     blocksize = A.shape[0] // 2**level
@@ -122,13 +65,7 @@ def diagblock(A, level, block_i):
     end = start + blocksize
     return A[start:end, start:end]
 
-# A = np.arange(64).reshape(8, 8)
-# rowblock_x_diag(A, 2, 2)
-# colblock_x_diag(A, 2, 2)
 
-
-# Don't actually need this? just use regular arithmetic on LinearOperator's
-# But if we want to access the factors,
 class FourPartLens(LinearOperator):
     def __init__(self, U, A, V, D, dtype=None):
         """
@@ -191,18 +128,22 @@ def nullspace_basis(X):
     n, _ = X.shape
     return np.linalg.qr(X.T, 'complete').Q[:, n:]
 
+
 def rowblock(A, level, block_i):
     blocksize = A.shape[0] // 2**level
     start = block_i * blocksize
     end = start + blocksize
     return A[start:end, :]
 
+
 def row_nullifier(Omega, level, block_i):
     return nullspace_basis(rowblock(Omega, level, block_i))
+
 
 def right_pseudoinv(X, Y):
     """Computes XY^+"""
     return np.linalg.lstsq(Y.T, X.T, rcond=None)[0].T
+
 
 def blockwise_right_pseudoinv(X, Y, level):
     """X has row blocks X_i, Y has row blocks Y_i.
@@ -250,110 +191,6 @@ def matvec_alg_resketch(A, level: int, r: int, num_sketches_per_level: int):
     D_l = Dpart1 + Dpart2
     A_lminus1 = matvec_alg_resketch(alo(U_l).T @ (alo(A) - alo(D_l)) @ alo(V_l), level-1, r, num_sketches_per_level)
     return FourPartLens(U_l, A_lminus1, V_l, D_l)
-
-
-def best_tile_approximation(A, level: int):
-    rows_per_block = A.shape[0] // 2**level
-    cols_per_block = A.shape[1] // 2**level
-    mean_block = A.reshape(2**level, rows_per_block, 2**level, cols_per_block).mean((0, 2))
-    return TiledMatrix(mean_block, 2**level, 2**level)
-
-
-def recover_branch_matrix(A, level: int):
-    if level == 0:
-        return A
-    A11 = A[:(A.shape[0]//2), :(A.shape[1]//2)]
-    A12 = A[:(A.shape[0]//2), (A.shape[1]//2):]
-    A21 = A[(A.shape[0]//2):, :(A.shape[1]//2)]
-    A22 = A[(A.shape[0]//2):, (A.shape[1]//2):]
-    upper_left = recover_branch_matrix(A11, level-1)
-    upper_right = best_tile_approximation(A12, level-1)
-    lower_left = best_tile_approximation(A21, level-1)
-    lower_right = recover_branch_matrix(A22, level-1)
-    return Block22Matrix(upper_left, upper_right, lower_left, lower_right)
-
-
-def diana_exact_helper(A, U, V, level):
-    if level == 0:
-        r = U.shape[1]
-        return sp.csr_matrix((r, r), dtype=A.dtype)
-    n, m = A.shape
-    A11 = A[:n//2, :m//2]
-    A12 = A[:n//2, m//2:]
-    A21 = A[n//2:, :m//2]
-    A22 = A[n//2:, m//2:]
-    upper_left = diana_exact_helper(A11, U[:n//2,:], V[:m//2,:], level-1)
-    upper_right = TiledMatrix(U[:n//2,:].T @ A12 @ V[m//2:,:], 2**(level-1), 2**(level-1))
-    lower_left = TiledMatrix(U[n//2:,:].T @ A21 @ V[:m//2,:], 2**(level-1), 2**(level-1))
-    lower_right = diana_exact_helper(A22, U[n//2:,:], V[m//2:,:], level-1)
-    return Block22Matrix(upper_left, upper_right, lower_left, lower_right)
-    # Udiag = sp.block_diag([rowblock(U, level, block_i) for block_i in range(2**level)], format="csr")
-    # Vdiag = sp.block_diag([rowblock(V, level, block_i) for block_i in range(2**level)], format="csr")
-    # np.allclose(Udiag[:4,:8] @ upper_right.toarray() @ Vdiag[4:,8:].T, A12)
-    # np.allclose(Udiag[4:,8:] @ lower_left.toarray() @ Vdiag[:4,:8].T, A21)
-    # Udiag[:4,:8] @ upper_left.toarray() @ Vdiag[:4,:8].T
-    # A11[:2,2:]
-
-def diana_exact(A, level: int, r: int):
-    if level == 0:  # is this necessary? I think it is, but only because rowblock_x_diag doesn't know how to handle level = 0
-        return A
-    D = sp.block_diag([diagblock(A, level, block_i) for block_i in range(2**level)])
-    Aclean = np.array(A - D)
-    n, m = Aclean.shape
-    svd_upper_right = np.linalg.svd(Aclean[:n//2,m//2:])
-    svd_lower_left = np.linalg.svd(Aclean[n//2:,:m//2])
-    U = np.concat((svd_upper_right.U[:,:r], svd_lower_left.U[:,:r]))
-    V = np.concat((svd_lower_left.Vh.T[:,:r], svd_upper_right.Vh.T[:,:r]))
-    A_compressed = diana_exact_helper(Aclean, U, V, level)
-    Udiag = sp.block_diag([rowblock(U, level, block_i) for block_i in range(2**level)], format="csr")
-    Vdiag = sp.block_diag([rowblock(V, level, block_i) for block_i in range(2**level)], format="csr")
-    return FourPartLens(Udiag, A_compressed, Vdiag, D)
-
-
-# OLD AND MISGUIDED
-def diana_random_access(A, level: int, r: int):
-    if level == 0:  # is this necessary? I think it is, but only because rowblock_x_diag doesn't know how to handle level = 0
-        return A
-    # replace with sklearn TruncatedSVD or with scipy.sparse.svds
-    U = sp.block_diag([np.linalg.svd(rowblock_x_diag(A, level, block_i), full_matrices=False).U[:, :r] for block_i in range(2**level)], format="csr")
-    # TODO: take conjugate transpose, not plain transpose. (or better yet, just switch this to be identical to above line but with A^* instead of A)
-    V = sp.block_diag([np.linalg.svd(colblock_x_diag(A, level, block_i), full_matrices=False).Vh.T[:, :r] for block_i in range(2**level)], format="csc")
-    D = sp.block_diag([diagblock(A, level, block_i) for block_i in range(2**level)])
-    A_compressed = recover_branch_matrix(np.asarray(U.T @ (A - D) @ V), level-2)
-    # A_compressed = U.T @ (A - D) @ V
-    return FourPartLens(U, A_compressed, V, D)
-
-# def diana_random_access(A, level: int, r: int):
-#     if level == 0:  # is this necessary? I think it is, but only because rowblock_x_diag doesn't know how to handle level = 0
-#         return A
-#     D = sp.block_diag([diagblock(A, level, block_i) for block_i in range(2**level)])
-#     Aclean = np.array(A - D)
-#     svd = np.linalg.svd(Aclean)
-#     U = sp.block_diag([rowblock(svd.U[:, :r], level, block_i) for block_i in range(2**level)], format="csr")
-#     V = sp.block_diag([rowblock(svd.Vh.T[:, :r], level, block_i) for block_i in range(2**level)], format="csr")
-#     A_compressed = recover_branch_matrix(np.asarray(U.T @ (A - D) @ V), level)
-#     # A_compressed = U.T @ (A - D) @ V
-#     return FourPartLens(U, A_compressed, V, D)
-
-def diana_fixed_up_OLD(A, level: int, r: int):
-    if level == 0:  # is this necessary? I think it is, but only because rowblock_x_diag doesn't know how to handle level = 0
-        return A
-    D = sp.csr_matrix(A.shape, dtype=A.dtype)
-    running_U = sp.linalg._interface.IdentityOperator(A.shape)
-    running_V = sp.linalg._interface.IdentityOperator(A.shape)
-    for l in range(level, 0, -1):
-        # U = sp.block_diag([np.linalg.svd(rowblock_x_diag(A, l, block_i), full_matrices=False).U[:, :r] for block_i in range(2**l)], format="csr")
-        # V = sp.block_diag([np.linalg.svd(colblock_x_diag(A, l, block_i), full_matrices=False).Vh.T[:, :r] for block_i in range(2**l)], format="csc")
-        rowblock_Us = [np.linalg.svd(rowblock_x_diag(A, l, block_i), full_matrices=False).U[:, :r] for block_i in range(2**l)]
-        # TODO: probably shouldn't just concatenate two identical matrices?
-        U = sp.block_diag([np.hstack((bigU/np.sqrt(2), bigU/np.sqrt(2))) for bigU in rowblock_Us], format="csr")
-        colblock_Vs = [np.linalg.svd(colblock_x_diag(A, l, block_i), full_matrices=False).Vh.T[:, :r] for block_i in range(2**l)]
-        V = sp.block_diag([np.hstack((bigV/np.sqrt(2), bigV/np.sqrt(2))) for bigV in colblock_Vs], format="csr")
-        A = np.asarray(U.T @ A @ V)
-        running_U = running_U @ U
-        running_V = running_V @ V
-    A_compressed = recover_branch_matrix(A, level)
-    return FourPartLens(running_U, A_compressed, running_V, D)
 
 
 def antidiagonals(As):
@@ -480,7 +317,6 @@ def diana_matvecs(A, level: int, r: int, num_sketches: int):
     return diana_matvecs_helper(right_Omega, A @ right_Omega, left_Omega, A.T @ left_Omega, level, r)
 
 
-
 class SparseInverse(LinearOperator):
     def __init__(self, A, dtype=None):
         assert A.shape[0] == A.shape[1]
@@ -521,9 +357,6 @@ if False:
     print(np.linalg.norm(A.toarray() - A_tilde_matvec.toarray(), np.inf))
     A_tilde_resketch = matvec_alg_resketch(A, order, 2*num_diags_above, 3*(2*num_diags_above))
     print(np.linalg.norm(A.toarray() - A_tilde_resketch.toarray(), np.inf))
-    # A_diana = diana_exact(A.toarray(), order, 2) #2*num_diags_above)
-    # print(np.linalg.norm(A.toarray() - A_diana.toarray(), np.inf))
-    # B = recover_branch_matrix(A_tilde.A.toarray(), order)
     A_diana = diana_fixed_up(A.toarray(), order-1, 2*num_diags_above)
     print(np.linalg.norm(A.toarray() - A_diana.toarray(), np.inf))
     A_diana_matvec = diana_matvecs(A, order-1, 2*num_diags_above, 3*(2*num_diags_above))
@@ -629,12 +462,10 @@ if True:
 # from scipy.sparse.linalg import SuperLU
 # SuperLU
 
-# sns.lineplot(df[df["sketch_dim"] > 8], x="sketch_dim", y="relative_error", hue="method", style="method", errorbar=("ci", 95), marker='o')
-# sns.lineplot(df[df["sketch_dim"] > 8], x="total_sketching", y="relative_error", hue="method", style="method", errorbar=("ci", 95), marker='o')
-
 
 # TODO
 # change the tolerance?
 # start from the levitt martinson solution to get Us and Vs, then do regression on the Ds? (warm starting from what's there already)
 # rewrite in pytorch for speed
 # right now, the first step of the algorithms are both basically the same except for the step of subtracting off D. can doing so help our version somehow?
+# TODO: correct the fresh sketch option by doing fresh sketches for the diagonal part too? actually check the paper
