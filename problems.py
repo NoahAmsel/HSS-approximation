@@ -9,7 +9,7 @@ class SparseInverse(LinearOperator):
         super().__init__(dtype, A.shape)
         # self.LU = sp.linalg.splu(A)  # TODO: get rid of below and just use this
         self.Ainv = factorized(A)
-        self.ATinv = factorized(A.T)
+        self.ATinv = factorized(A.T.tocsc())
         self._init_dtype()
 
     def _matmat(self, other): return self.Ainv(other)
@@ -19,11 +19,11 @@ class SparseInverse(LinearOperator):
 
 def banded_gaussian(N, half_bandwidth):
     offsets = list(range(-half_bandwidth, half_bandwidth+1))
-    return sp.diags_array([np.random.randn(N-abs(offset)) for offset in offsets], offsets=offsets)
+    return sp.diags_array([np.random.randn(N-abs(offset)) for offset in offsets], offsets=offsets, format='csc')
 
 
 def grid_schur_complement(partitioned_grid_dimension, other_grid_dimension):
-    L = sp.linalg.LaplacianNd((partitioned_grid_dimension, other_grid_dimension), dtype=np.float64).tosparse()
+    L = sp.linalg.LaplacianNd((partitioned_grid_dimension, other_grid_dimension), dtype=np.float64).tosparse().tocsc()
     j1 = other_grid_dimension * (partitioned_grid_dimension//2)
     j2 = j1 + other_grid_dimension
     C11 = L[:j1, :j1]
@@ -37,5 +37,20 @@ def grid_schur_complement(partitioned_grid_dimension, other_grid_dimension):
     return A
 
 
-def grid_schur_complement_(partitioned_grid_dimension, leaf_size, levels):
+def grid_schur_complement_levels(partitioned_grid_dimension, leaf_size, levels):
     return grid_schur_complement(partitioned_grid_dimension, leaf_size*(2**levels))
+
+
+def factor2_example(N, eps):
+    assert N % 2 == 0
+    off_diagonal = np.array([[0, 1+eps], [1, 0]])
+    eye = np.eye(2)
+    zero = np.zeros((2, 2))
+    def block(i, j):
+        if i == j:
+            return zero
+        if i + j == N - 1:
+            return off_diagonal
+        else:
+            return eye
+    return np.block([[block(i, j) for i in range(N)] for j in range(N)])
