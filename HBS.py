@@ -158,6 +158,10 @@ def matvec_alg_unified_sketch_helper(Omega1, AOmega1, Omega2, ATOmega2, level: i
         return right_pseudoinv(AOmega1, Omega1)
     U_l = sp.block_diag([np.linalg.svd(rowblock(AOmega1, level, block_i) @ row_nullifier(Omega1, level, block_i), full_matrices=False).U[:, :r] for block_i in range(2**level)])
     V_l = sp.block_diag([np.linalg.svd(rowblock(ATOmega2, level, block_i) @ row_nullifier(Omega2, level, block_i), full_matrices=False).U[:, :r] for block_i in range(2**level)])
+    # TODO! instead of this diagonal recovery, do a two sided least squares solve to recover the diagonal blocks.
+    # each block is a pretty small least squares problem
+    # then just find D - UU^T D VV^T explicitly
+    # to see the effect in the experiments, just try adding some huge random entries on the diagonal blocks
     Dpart1 = blockwise_right_pseudoinv(AOmega1 - U_l @ (U_l.T @ AOmega1), Omega1, level)
     Dpart2 = U_l @ (U_l.T @ blockwise_right_pseudoinv(ATOmega2 - V_l @ (V_l.T @ ATOmega2), Omega2, level).T)
     D_l = Dpart1 + Dpart2
@@ -242,7 +246,7 @@ def assembleTranspose(cummulativeUs, M, cummulativeVs, level):
     return np.concat(lll)
 
 
-def diana_fixed_up(A, level: int, r: int):
+def random_access_optimal_core(A, level: int, r: int):
     if level == 0:  # is this necessary? I think it is, but only because rowblock_x_diag doesn't know how to handle level = 0
         return A
     blocksize = A.shape[0] // (2**level)
@@ -267,7 +271,7 @@ def diana_fixed_up(A, level: int, r: int):
     return assembleHSS(cummulativeUs, a_star, cummulativeVs, level, r)
 
 
-def diana_matvecs_helper(Omega1, AOmega1, Omega2, ATOmega2, level: int, r: int):
+def matvecs_optimal_core_helper(Omega1, AOmega1, Omega2, ATOmega2, level: int, r: int, recover_D: bool):
     if level == 0:  # is this necessary? I think it is, but only because rowblock_x_diag doesn't know how to handle level = 0
         # NOTE this isn't symmetric in approximate case
         return right_pseudoinv(AOmega1, Omega1)
@@ -283,10 +287,13 @@ def diana_matvecs_helper(Omega1, AOmega1, Omega2, ATOmega2, level: int, r: int):
         U = sp.block_diag([np.linalg.svd(rowblock(running_AOmega1, l, block_i) @ row_nullifier(running_Omega1, l, block_i), full_matrices=False).U[:, :r] for block_i in range(2**l)], format="csr")
         V = sp.block_diag([np.linalg.svd(rowblock(running_ATOmega2, l, block_i) @ row_nullifier(running_Omega2, l, block_i), full_matrices=False).U[:, :r] for block_i in range(2**l)], format="csc")
 
-        Dpart1 = blockwise_right_pseudoinv(running_AOmega1 - U @ (U.T @ running_AOmega1), running_Omega1, l)
-        Dpart2 = U @ (U.T @ blockwise_right_pseudoinv(running_ATOmega2 - V @ (V.T @ running_ATOmega2), running_Omega2, l).T)
-        D_l = Dpart1 + Dpart2
-
+        if recover_D:
+            Dpart1 = blockwise_right_pseudoinv(running_AOmega1 - U @ (U.T @ running_AOmega1), running_Omega1, l)
+            Dpart2 = U @ (U.T @ blockwise_right_pseudoinv(running_ATOmega2 - V @ (V.T @ running_ATOmega2), running_Omega2, l).T)
+            D_l = Dpart1 + Dpart2
+        else:
+            # all zeros
+            D_l = sp.csr_array((running_AOmega1.shape[0], running_ATOmega2.shape[0]))
         running_AOmega1 = U.T @ (running_AOmega1 - D_l @ running_Omega1)
         running_Omega1 = V.T @ running_Omega1
         running_ATOmega2 = V.T @ (running_ATOmega2 - D_l.T @ running_Omega2)
@@ -311,10 +318,10 @@ def diana_matvecs_helper(Omega1, AOmega1, Omega2, ATOmega2, level: int, r: int):
     return assembleHSS(cummulativeUs, a_star, cummulativeVs, level, r)
 
 
-def diana_matvecs(A, level: int, r: int, num_sketches: int):
+def matvecs_optimal_core(A, level: int, r: int, num_sketches: int, recover_D: bool):
     left_Omega = np.random.randn(A.shape[0], num_sketches)
     right_Omega = np.random.randn(A.shape[1], num_sketches)
-    return diana_matvecs_helper(right_Omega, A @ right_Omega, left_Omega, A.T @ left_Omega, level, r)
+    return matvecs_optimal_core_helper(right_Omega, A @ right_Omega, left_Omega, A.T @ left_Omega, level, r, recover_D)
 
 
 class SparseInverse(LinearOperator):
@@ -341,9 +348,9 @@ if False:
     A = np.random.randn(N, r) @ np.random.randn(r, N)
     A_tilde = random_access_greedy_alg(A, 1, 3)
     print(np.linalg.norm(A - A_tilde.toarray(), np.inf))
-    A_diana = diana_fixed_up(A, 1, 3)
+    A_diana = random_access_optimal_core(A, 1, 3)
     print(np.linalg.norm(A - A_diana.toarray(), np.inf))
-    A_diana_matvecs = diana_matvecs(A, 1, 3, 10000)
+    A_diana_matvecs = matvecs_optimal_core(A, 1, 3, 10000, False)
     print(np.linalg.norm(A - A_diana_matvecs.toarray(), np.inf))
 
 
@@ -357,9 +364,9 @@ if False:
     print(np.linalg.norm(A.toarray() - A_tilde_matvec.toarray(), np.inf))
     A_tilde_resketch = matvec_alg_resketch(A, order, 2*num_diags_above, 3*(2*num_diags_above))
     print(np.linalg.norm(A.toarray() - A_tilde_resketch.toarray(), np.inf))
-    A_diana = diana_fixed_up(A.toarray(), order-1, 2*num_diags_above)
+    A_diana = random_access_optimal_core(A.toarray(), order-1, 2*num_diags_above)
     print(np.linalg.norm(A.toarray() - A_diana.toarray(), np.inf))
-    A_diana_matvec = diana_matvecs(A, order-1, 2*num_diags_above, 3*(2*num_diags_above))
+    A_diana_matvec = matvecs_optimal_core(A, order-1, 2*num_diags_above, 3*(2*num_diags_above), False)
     print(np.linalg.norm(A.toarray() - A_diana_matvec.toarray(), np.inf))
 
     # now with a too-small rank
@@ -369,9 +376,9 @@ if False:
     print(np.linalg.norm(A.toarray() - A_tilde_matvec.toarray(), np.inf))
     A_tilde_resketch = matvec_alg_resketch(A, order, 1, 3*(2*num_diags_above))
     print(np.linalg.norm(A.toarray() - A_tilde_resketch.toarray(), np.inf))
-    A_tilde_diana = diana_fixed_up(A.toarray(), order, 1)
+    A_tilde_diana = random_access_optimal_core(A.toarray(), order, 1)
     print(np.linalg.norm(A.toarray() - A_tilde_diana.toarray(), np.inf))
-    A_tilde_diana_matvec = diana_matvecs(A, order, 1, 3*(2*num_diags_above))
+    A_tilde_diana_matvec = matvecs_optimal_core(A, order, 1, 3*(2*num_diags_above), True)
     print(np.linalg.norm(A.toarray() - A_tilde_diana_matvec.toarray(), np.inf))
 
 
@@ -422,7 +429,8 @@ if True:
     recovery_levels = int(np.floor(np.log2(A.shape[0] / r)))
 
     methods = {
-        "regression": lambda s: diana_matvecs(A, recovery_levels, r, s),
+        "regression": lambda s: matvecs_optimal_core(A, recovery_levels, r, s, False),
+        "regression_recover_diagonal": lambda s: matvecs_optimal_core(A, recovery_levels, r, s, True),
         "fresh sketches": lambda s: matvec_alg_resketch(A, recovery_levels, r, s),
         "one sketch": lambda s: matvec_alg_unified_sketch(A, recovery_levels, r, s),
     }
