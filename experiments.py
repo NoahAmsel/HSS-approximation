@@ -11,7 +11,7 @@ from scipy.sparse.linalg import aslinearoperator as alo
 import seaborn as sns
 
 from HSS_approx import matvec_alg_resketch, matvec_alg_unified_sketch, matvecs_optimal_core, random_access_greedy_alg
-from problems import banded_gaussian, grid_schur_complement, SparseInverse
+from problems import banded_gaussian, factor2_example, factor2_optimal_solution, grid_schur_complement, SparseInverse
 
 
 def approx_Frob(A, sketch_size):
@@ -51,8 +51,8 @@ def plot_sketch_size_vs_error(A, title, methods, num_sketches, total_sketches_mu
     plt.suptitle(title)
     for ax, x_col in zip(axs, ["Queries per Level", "Total Queries"]):
         # NOTE: This assumes that these non sketching methods are deterministic
-        for method_name, method_result in non_sketching_results.items():
-            ax.axhline(method_result, label=method_name, color='black', linestyle=':')
+        for (method_name, method_result), style in zip(non_sketching_results.items(), ['-.', ':']):
+            ax.axhline(method_result, label=method_name, color='black', linestyle=style)
         sns.lineplot(df, x=x_col, y="Relative Frobenius Error", hue="Method", style="Method", errorbar=("ci", 95), marker='o', ax=ax)
         ax.set_xscale("log")
     Path(savedir).mkdir(parents=True, exist_ok=True)
@@ -79,7 +79,7 @@ def schur_gunnar():
         methods,
         [(s * 6) // 9, (s * 7) // 9, (s * 8) // 9, s],
         {"Fresh Sketches": levels},
-        repeats=1,
+        repeats=10,
         approx_frobenius=int(1e3),
         savedir="out",
     )
@@ -105,7 +105,7 @@ def schur_smaller(m):
         A,
         title,
         methods,
-        np.linspace(s // 2, s, 8, endpoint=True, dtype=int),
+        np.linspace(s // 2, s * 3 // 2, 8, endpoint=True, dtype=int),
         {"Fresh Sketches": levels},
         non_sketching_methods=non_sketching_methods,
         repeats=10,
@@ -126,13 +126,22 @@ def banded_inverse(levels, num_diags_above, r=None):
     recovery_levels = int(np.floor(np.log2(A.shape[0] / r)))
 
     methods = {
-        # "regression": lambda s: matvecs_optimal_core(A, recovery_levels, r, s, False),
-        # "regression_recover_diagonal": lambda s: matvecs_optimal_core(A, recovery_levels, r, s, True),
         "Fresh Sketches": lambda A, s: matvec_alg_resketch(A, recovery_levels, r, s),
         "Recycled Sketch": lambda A, s: matvec_alg_unified_sketch(A, recovery_levels, r, s),
     }
     non_sketching_methods = {"Random Access": lambda A: random_access_greedy_alg(A.toarray(), levels, r)}
-    plot_sketch_size_vs_error(A, title, methods, [16, 32, 64, 128, 256], {"Fresh Sketches": levels}, non_sketching_methods=non_sketching_methods, repeats=1, approx_frobenius=int(1e3), savedir="out")
+    plot_sketch_size_vs_error(A, title, methods, [16, 32, 64, 128, 256], {"Fresh Sketches": levels}, non_sketching_methods=non_sketching_methods, repeats=10, approx_frobenius=int(1e3), savedir="out")
+
+
+def two_factor(N, eps):
+    A = factor2_example(N, eps)
+    methods = {
+        "Fresh Sketches": lambda A, s: matvec_alg_resketch(A, 1, 1, s),
+        "Recycled Sketch": lambda A, s: matvec_alg_unified_sketch(A, 1, 1, s),
+    }
+    non_sketching_methods = {"Greedy": lambda A: random_access_greedy_alg(A, 1, 1), "Optimal": lambda _: factor2_optimal_solution(N)}
+    title = f"Hard Construction\nN={N},eps={eps}"
+    plot_sketch_size_vs_error(A, title, methods, [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024], {"Fresh Sketches": 1}, non_sketching_methods=non_sketching_methods, repeats=10, savedir="out")
 
 
 if __name__ == "__main__":
@@ -140,5 +149,10 @@ if __name__ == "__main__":
     # schur_smaller(2)  # this is weird for m = 2, 3, 4
     # schur_smaller(3)
     # schur_smaller(4)
-    banded_inverse(levels=12, num_diags_above=5)
-    banded_inverse(levels=12, num_diags_above=5, r=5)
+    # banded_inverse(levels=12, num_diags_above=5)
+    # banded_inverse(levels=12, num_diags_above=5, r=5)
+    two_factor(100, 0.1)
+
+# TODO! Redo everything with a leaf size > 1.
+# The problem is that currently, our algs assume we're going all the way to the diagonal
+# So for the hard case, we want level=1, block size = 2. but it's implicitly assuming level=1 => block size = 4.

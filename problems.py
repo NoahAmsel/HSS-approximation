@@ -3,6 +3,9 @@ import scipy.sparse as sp
 from scipy.sparse.linalg import aslinearoperator as alo, factorized, LinearOperator
 
 
+from HSS_approx import FourPartLens
+
+
 class SparseInverse(LinearOperator):
     def __init__(self, A, dtype=None):
         assert A.shape[0] == A.shape[1]
@@ -54,3 +57,8 @@ def factor2_example(N, eps):
         else:
             return eye
     return np.block([[block(i, j) for i in range(N)] for j in range(N)])
+
+
+def factor2_optimal_solution(N):
+    block_diag_ones = sp.block_diag([np.ones((2, 1)) for _ in range(N)])
+    return FourPartLens(block_diag_ones, np.ones((N, N)), block_diag_ones, sp.block_diag([-np.ones((2, 2)) for _ in range(N)]))

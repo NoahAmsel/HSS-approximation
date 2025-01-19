@@ -4,8 +4,6 @@ import operator
 import scipy.sparse as sp
 from scipy.sparse.linalg import aslinearoperator as alo, LinearOperator
 
-from problems import banded_gaussian, SparseInverse
-
 
 class HcatLinearOperator(LinearOperator):
     def __init__(self, A1: LinearOperator, A2: LinearOperator, dtype=None):
@@ -328,6 +326,7 @@ if False:
 
 
 if False:
+    from problems import banded_gaussian, SparseInverse
     order = 3 # 8
     num_diags_above = 1
     A = SparseInverse(banded_gaussian(2**order, num_diags_above))
