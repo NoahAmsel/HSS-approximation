@@ -3,7 +3,7 @@ import scipy.sparse as sp
 from scipy.sparse.linalg import aslinearoperator as alo, factorized, LinearOperator
 
 
-from HSS_approx import FourPartLens
+from structures import FourPartLens
 
 
 class SparseInverse(LinearOperator):
