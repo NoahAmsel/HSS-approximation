@@ -61,4 +61,4 @@ def factor2_example(N, eps):
 
 def factor2_optimal_solution(N):
     block_diag_ones = sp.block_diag([np.ones((2, 1)) for _ in range(N)])
-    return FourPartLens(block_diag_ones, np.ones((N, N)), block_diag_ones, sp.block_diag([-np.ones((2, 2)) for _ in range(N)]))
+    return FourPartLens(block_diag_ones, 0.5 * np.ones((N, N)), block_diag_ones, sp.block_diag([-np.ones((2, 2)) for _ in range(N)]))

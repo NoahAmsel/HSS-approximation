@@ -133,15 +133,19 @@ def banded_inverse(levels, num_diags_above, r=None):
     plot_sketch_size_vs_error(A, title, methods, [16, 32, 64, 128, 256], {"Fresh Sketches": levels}, non_sketching_methods=non_sketching_methods, repeats=10, approx_frobenius=int(1e3), savedir="out")
 
 
-def two_factor(N, eps):
+def two_factor(logN, eps):
+    N = 2 ** logN
     A = factor2_example(N, eps)
+    level = logN
+    rank = 1
+    top_level = level - 1
     methods = {
-        "Fresh Sketches": lambda A, s: matvec_alg_resketch(A, 1, 1, s),
-        "Recycled Sketch": lambda A, s: matvec_alg_unified_sketch(A, 1, 1, s),
+        "Fresh Sketches": lambda A, s: matvec_alg_resketch(A, level, rank, s, top_level),
+        "Recycled Sketch": lambda A, s: matvec_alg_unified_sketch(A, level, rank, s, top_level),
     }
-    non_sketching_methods = {"Greedy": lambda A: random_access_greedy_alg(A, 1, 1), "Optimal": lambda _: factor2_optimal_solution(N)}
+    non_sketching_methods = {"Greedy": lambda A: random_access_greedy_alg(A, level, rank, top_level=top_level), "Optimal": lambda _: factor2_optimal_solution(N)}
     title = f"Hard Construction\nN={N},eps={eps}"
-    plot_sketch_size_vs_error(A, title, methods, [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024], {"Fresh Sketches": 1}, non_sketching_methods=non_sketching_methods, repeats=10, savedir="out")
+    plot_sketch_size_vs_error(A, title, methods, [1, 2, 4, 8, 16, 32, 56, 60, 64, 68, 72, 128, 256, 512, 1024], {"Fresh Sketches": 1}, non_sketching_methods=non_sketching_methods, repeats=10, savedir="out")
 
 
 if __name__ == "__main__":
@@ -149,9 +153,11 @@ if __name__ == "__main__":
     # schur_smaller(2)  # this is weird for m = 2, 3, 4
     # schur_smaller(3)
     # schur_smaller(4)
-    # banded_inverse(levels=12, num_diags_above=5)
-    # banded_inverse(levels=12, num_diags_above=5, r=5)
-    two_factor(100, 0.1)
+    banded_inverse(levels=12, num_diags_above=5)
+    banded_inverse(levels=12, num_diags_above=5, r=5)
+    # two_factor(6, 0.1)
+    # two_factor(6, 0.01)
+    # two_factor(6, 0.001)
 
 # TODO! Redo everything with a leaf size > 1.
 # The problem is that currently, our algs assume we're going all the way to the diagonal

@@ -27,15 +27,15 @@ def diagblock(A, level, block_i):
 
 # TODO! block_diag is outputting COO format.
 # we should use CSR for U and D, and CSC for V
-def random_access_greedy_alg(A: np.ndarray, level: int, r: int):
-    if level == 0:
+def random_access_greedy_alg(A: np.ndarray, level: int, r: int, top_level: int = 0):
+    if level == top_level:
         return A
     # replace with sklearn TruncatedSVD or with scipy.sparse.svds
     U_l = sp.block_diag([np.linalg.svd(rowblock_x_diag(A, level, block_i), full_matrices=False).U[:, :r] for block_i in range(2**level)])
     # TODO: take conjugate transpose, not plain transpose. (or better yet, just switch this to be identical to above line but with A^* instead of A)
     V_l = sp.block_diag([np.linalg.svd(colblock_x_diag(A, level, block_i), full_matrices=False).Vh.T[:, :r] for block_i in range(2**level)])
     D_l = sp.block_diag([diagblock(A, level, block_i) for block_i in range(2**level)])
-    A_lminus1 = random_access_greedy_alg(np.asarray(U_l.T @ (A - D_l) @ V_l), level-1, r)
+    A_lminus1 = random_access_greedy_alg(np.asarray(U_l.T @ (A - D_l) @ V_l), level-1, r, top_level=top_level)
     return FourPartLens(U_l, A_lminus1, V_l, D_l)
 
 
@@ -69,8 +69,8 @@ def blockwise_right_pseudoinv(X, Y, level):
     return sp.block_diag([right_pseudoinv(rowblock(X, level, block_i), rowblock(Y, level, block_i)) for block_i in range(2**level)])
 
 
-def matvec_alg_unified_sketch_helper(Omega1, AOmega1, Omega2, ATOmega2, level: int, r: int):
-    if level == 0:
+def matvec_alg_unified_sketch_helper(Omega1, AOmega1, Omega2, ATOmega2, level: int, r: int, top_level: int):
+    if level == top_level:
         # NOTE this isn't symmetric in approximate case
         return right_pseudoinv(AOmega1, Omega1)
     U_l = sp.block_diag([np.linalg.svd(rowblock(AOmega1, level, block_i) @ row_nullifier(Omega1, level, block_i), full_matrices=False).U[:, :r] for block_i in range(2**level)])
@@ -86,22 +86,22 @@ def matvec_alg_unified_sketch_helper(Omega1, AOmega1, Omega2, ATOmega2, level: i
     newAOmega1 = U_l.T @ (AOmega1 - D_l @ Omega1)
     newOmega2 = U_l.T @ Omega2
     newATOmega2 = V_l.T @ (ATOmega2 - D_l.T @ Omega2)
-    A_lminus1 = matvec_alg_unified_sketch_helper(newOmega1, newAOmega1, newOmega2, newATOmega2, level-1, r)
+    A_lminus1 = matvec_alg_unified_sketch_helper(newOmega1, newAOmega1, newOmega2, newATOmega2, level-1, r, top_level)
     return FourPartLens(U_l, A_lminus1, V_l, D_l)
 
 
-def matvec_alg_unified_sketch(A, level: int, r: int, num_sketches:int):
+def matvec_alg_unified_sketch(A, level: int, r: int, num_sketches:int, top_level: int = 0):
     left_Omega = np.random.randn(A.shape[0], num_sketches)
     right_Omega = np.random.randn(A.shape[1], num_sketches)
-    return matvec_alg_unified_sketch_helper(right_Omega, A @ right_Omega, left_Omega, A.T @ left_Omega, level, r)
+    return matvec_alg_unified_sketch_helper(right_Omega, A @ right_Omega, left_Omega, A.T @ left_Omega, level, r, top_level=top_level)
 
 
-def matvec_alg_resketch(A, level: int, r: int, num_sketches_per_level: int):
+def matvec_alg_resketch(A, level: int, r: int, num_sketches_per_level: int, top_level: int = 0):
     Omega1 = np.random.randn(A.shape[1], num_sketches_per_level)
     AOmega1 = A @ Omega1
     Omega2 = np.random.randn(A.shape[0], num_sketches_per_level)
     ATOmega2 = A.T @ Omega2
-    if level == 0:
+    if level == top_level:
         # NOTE this isn't symmetric in approximate case
         return right_pseudoinv(AOmega1, Omega1)
     U_l = sp.block_diag([np.linalg.svd(rowblock(AOmega1, level, block_i) @ row_nullifier(Omega1, level, block_i), full_matrices=False).U[:, :r] for block_i in range(2**level)])
@@ -110,7 +110,7 @@ def matvec_alg_resketch(A, level: int, r: int, num_sketches_per_level: int):
     Dpart1 = blockwise_right_pseudoinv(AOmega1 - U_l @ (U_l.T @ AOmega1), Omega1, level)
     Dpart2 = U_l @ (U_l.T @ blockwise_right_pseudoinv(ATOmega2 - V_l @ (V_l.T @ ATOmega2), Omega2, level).T)
     D_l = Dpart1 + Dpart2
-    A_lminus1 = matvec_alg_resketch(alo(U_l).T @ (alo(A) - alo(D_l)) @ alo(V_l), level-1, r, num_sketches_per_level)
+    A_lminus1 = matvec_alg_resketch(alo(U_l).T @ (alo(A) - alo(D_l)) @ alo(V_l), level-1, r, num_sketches_per_level, top_level=top_level)
     return FourPartLens(U_l, A_lminus1, V_l, D_l)
 
 
