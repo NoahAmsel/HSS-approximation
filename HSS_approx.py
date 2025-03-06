@@ -54,12 +54,58 @@ def rowblock(A, level, block_i):
 
 
 def row_nullifier(Omega, level, block_i):
-    return nullspace_basis(rowblock(Omega, level, block_i))
+    out = nullspace_basis(rowblock(Omega, level, block_i))
+    if out.shape[1] == 0:
+        rows, samples = rowblock(Omega, level, block_i).shape
+        raise ValueError(f"Unable to nullify {rows} rows when there are only {samples} columns. Try increasing the sketch size.")
+    return out
 
 
 def right_pseudoinv(X, Y):
     """Computes XY^+"""
     return np.linalg.lstsq(Y.T, X.T, rcond=None)[0].T
+
+
+def two_sided_lstsq(Omega1, AOmega1, Omega2, ATOmega2):
+    # NOTE: This can get quite slow
+    def vec(X): return X.T.reshape(-1)
+    def unvec(x, num_rows): return x.reshape(len(x) // num_rows, num_rows).T
+    LHS = np.vstack((
+        np.kron(Omega1.T, np.eye(AOmega1.shape[0])),
+        np.kron(np.eye(ATOmega2.shape[0]), Omega2.T),
+    ))
+    RHS = np.concat((
+        vec(AOmega1),
+        vec(ATOmega2.T),
+    ))
+    vecA = np.linalg.lstsq(LHS, RHS, rcond=None)[0]
+    return unvec(vecA, AOmega1.shape[0])
+
+
+def two_sided_iterative(Omega1, AOmega1, Omega2, ATOmega2):
+    # TODO: precondition me somehow
+    Arows, Acols = AOmega1.shape[0], ATOmega2.shape[0]
+    s1, s2 = Omega1.shape[1], Omega2.shape[1]
+    def vec(X): return X.T.reshape(-1)
+    def unvec(x, num_rows): return x.reshape(len(x) // num_rows, num_rows).T
+    def matvec(vec_a):
+        A = unvec(vec_a, AOmega1.shape[0])
+        return np.concat((
+            vec(A @ Omega1),
+            vec(Omega2.T @ A),
+        ))
+    def rmatvec(v):
+        mat1 = unvec(v[:Arows * s1], Arows)
+        mat2 = unvec(v[Arows * s1:], s2)
+        return vec(mat1 @ Omega1.T) + vec(Omega2 @ mat2)
+    LHS = LinearOperator(shape=(Arows * s1 + Acols * s2, Arows * Acols), matvec=matvec, rmatvec=rmatvec)
+    RHS = np.concat((
+        vec(AOmega1),
+        vec(ATOmega2.T),
+    ))
+    warm_start = vec(right_pseudoinv(AOmega1, Omega1))
+    vec_a = sp.linalg.lsqr(LHS, RHS, x0=warm_start)[0]
+    return unvec(vec_a, Arows)
 
 
 def blockwise_right_pseudoinv(X, Y, level):
@@ -96,7 +142,47 @@ def matvec_alg_unified_sketch(A, level: int, r: int, num_sketches:int, top_level
     return matvec_alg_unified_sketch_helper(right_Omega, A @ right_Omega, left_Omega, A.T @ left_Omega, level, r, top_level=top_level)
 
 
-def matvec_alg_resketch(A, level: int, r: int, num_sketches_per_level: int, top_level: int = 0):
+def matvec_alg_double_unified_sketch_helper(Omega1, AOmega1, Omega2, ATOmega2, tilde_Omega1, tilde_AOmega1, tilde_Omega2, tilde_ATOmega2, level: int, r: int, top_level: int):
+    if level == top_level:
+        # NOTE this isn't symmetric in approximate case
+        # return right_pseudoinv(AOmega1, Omega1)
+        # return right_pseudoinv(tilde_AOmega1, tilde_Omega1)
+        return two_sided_lstsq(tilde_Omega1, tilde_AOmega1, tilde_Omega2, tilde_ATOmega2)
+        # return two_sided_iterative(tilde_Omega1, tilde_AOmega1, tilde_Omega2, tilde_ATOmega2)
+    U_l = sp.block_diag([np.linalg.svd(rowblock(AOmega1, level, block_i) @ row_nullifier(Omega1, level, block_i), full_matrices=False).U[:, :r] for block_i in range(2**level)])
+    V_l = sp.block_diag([np.linalg.svd(rowblock(ATOmega2, level, block_i) @ row_nullifier(Omega2, level, block_i), full_matrices=False).U[:, :r] for block_i in range(2**level)])
+    # TODO! instead of this diagonal recovery, do a two sided least squares solve to recover the diagonal blocks.
+    # each block is a pretty small least squares problem
+    # then just find D - UU^T D VV^T explicitly
+    # to see the effect in the experiments, just try adding some huge random entries on the diagonal blocks
+    Dpart1 = blockwise_right_pseudoinv(tilde_AOmega1 - U_l @ (U_l.T @ tilde_AOmega1), tilde_Omega1, level)
+    Dpart2 = U_l @ (U_l.T @ blockwise_right_pseudoinv(tilde_ATOmega2 - V_l @ (V_l.T @ tilde_ATOmega2), tilde_Omega2, level).T)
+    D_l = Dpart1 + Dpart2
+    newOmega1 = V_l.T @ Omega1
+    newAOmega1 = U_l.T @ (AOmega1 - D_l @ Omega1)
+    newOmega2 = U_l.T @ Omega2
+    newATOmega2 = V_l.T @ (ATOmega2 - D_l.T @ Omega2)
+    new_tilde_Omega1 = V_l.T @ tilde_Omega1
+    new_tilde_AOmega1 = U_l.T @ (tilde_AOmega1 - D_l @ tilde_Omega1)
+    new_tilde_Omega2 = U_l.T @ tilde_Omega2
+    new_tilde_ATOmega2 = V_l.T @ (tilde_ATOmega2 - D_l.T @ tilde_Omega2)
+    A_lminus1 = matvec_alg_double_unified_sketch_helper(newOmega1, newAOmega1, newOmega2, newATOmega2, new_tilde_Omega1, new_tilde_AOmega1, new_tilde_Omega2, new_tilde_ATOmega2, level-1, r, top_level)
+    return FourPartLens(U_l, A_lminus1, V_l, D_l)
+
+
+def matvec_alg_double_unified_sketch(A, level: int, r: int, num_sketches:int, top_level: int = 0):
+    left_Omega = np.random.randn(A.shape[0], num_sketches)
+    right_Omega = np.random.randn(A.shape[1], num_sketches)
+    tilde_left_Omega = np.random.randn(A.shape[0], num_sketches)
+    tilde_right_Omega = np.random.randn(A.shape[1], num_sketches)
+    return matvec_alg_double_unified_sketch_helper(
+        right_Omega, A @ right_Omega, left_Omega, A.T @ left_Omega,
+        tilde_right_Omega, A @ tilde_right_Omega, tilde_left_Omega, A.T @ tilde_left_Omega,
+        level, r, top_level=top_level
+    )
+
+
+def matvec_alg_resketch(A, level: int, r: int, num_sketches_per_level: int, top_level: int = 0, second_sketch_for_D: bool = True):
     Omega1 = np.random.randn(A.shape[1], num_sketches_per_level)
     AOmega1 = A @ Omega1
     Omega2 = np.random.randn(A.shape[0], num_sketches_per_level)
@@ -106,9 +192,16 @@ def matvec_alg_resketch(A, level: int, r: int, num_sketches_per_level: int, top_
         return right_pseudoinv(AOmega1, Omega1)
     U_l = sp.block_diag([np.linalg.svd(rowblock(AOmega1, level, block_i) @ row_nullifier(Omega1, level, block_i), full_matrices=False).U[:, :r] for block_i in range(2**level)])
     V_l = sp.block_diag([np.linalg.svd(rowblock(ATOmega2, level, block_i) @ row_nullifier(Omega2, level, block_i), full_matrices=False).U[:, :r] for block_i in range(2**level)])
-    # TODO! I should use a fresh omega here too! \/
-    Dpart1 = blockwise_right_pseudoinv(AOmega1 - U_l @ (U_l.T @ AOmega1), Omega1, level)
-    Dpart2 = U_l @ (U_l.T @ blockwise_right_pseudoinv(ATOmega2 - V_l @ (V_l.T @ ATOmega2), Omega2, level).T)
+    if second_sketch_for_D:
+        tilde_Omega1 = np.random.randn(A.shape[1], num_sketches_per_level)
+        tilde_AOmega1 = A @ tilde_Omega1
+        tilde_Omega2 = np.random.randn(A.shape[0], num_sketches_per_level)
+        tilde_ATOmega2 = A.T @ tilde_Omega2
+        Dpart1 = blockwise_right_pseudoinv(tilde_AOmega1 - U_l @ (U_l.T @ tilde_AOmega1), tilde_Omega1, level)
+        Dpart2 = U_l @ (U_l.T @ blockwise_right_pseudoinv(tilde_ATOmega2 - V_l @ (V_l.T @ tilde_ATOmega2), tilde_Omega2, level).T)
+    else:
+        Dpart1 = blockwise_right_pseudoinv(AOmega1 - U_l @ (U_l.T @ AOmega1), Omega1, level)
+        Dpart2 = U_l @ (U_l.T @ blockwise_right_pseudoinv(ATOmega2 - V_l @ (V_l.T @ ATOmega2), Omega2, level).T)
     D_l = Dpart1 + Dpart2
     A_lminus1 = matvec_alg_resketch(alo(U_l).T @ (alo(A) - alo(D_l)) @ alo(V_l), level-1, r, num_sketches_per_level, top_level=top_level)
     return FourPartLens(U_l, A_lminus1, V_l, D_l)
@@ -162,7 +255,8 @@ def assembleTranspose(cummulativeUs, M, cummulativeVs, level):
         lll.append(extract_antidiagonals(cummulativeUs[i].T @ M @ cummulativeVs[i], l))
     return np.concat(lll)
 
-
+# TODO! rather than stepping with respect to all of the diagonals from all levels simultaneously
+# just do one level at a time. Then the least squares problem is much easier to solve.
 def random_access_optimal_core(A, level: int, r: int):
     if level == 0:  # is this necessary? I think it is, but only because rowblock_x_diag doesn't know how to handle level = 0
         return A
@@ -258,27 +352,31 @@ if False:
     num_diags_above = 1
     A = SparseInverse(banded_gaussian(2**order, num_diags_above))
     A_tilde = random_access_greedy_alg(A.toarray(), order, 2*num_diags_above)
-    print(np.linalg.norm(A.toarray() - A_tilde.toarray(), np.inf))
+    print("1.\t", np.linalg.norm(A.toarray() - A_tilde.toarray(), np.inf))
     A_tilde_matvec = matvec_alg_unified_sketch(A, order, 2*num_diags_above, 3*(2*num_diags_above))
-    print(np.linalg.norm(A.toarray() - A_tilde_matvec.toarray(), np.inf))
+    print("2.\t", np.linalg.norm(A.toarray() - A_tilde_matvec.toarray(), np.inf))
+    A_tilde_matvec_double = matvec_alg_double_unified_sketch(A, order, 2*num_diags_above, 3*(2*num_diags_above))
+    print("3.\t", np.linalg.norm(A.toarray() - A_tilde_matvec_double.toarray(), np.inf))
     A_tilde_resketch = matvec_alg_resketch(A, order, 2*num_diags_above, 3*(2*num_diags_above))
-    print(np.linalg.norm(A.toarray() - A_tilde_resketch.toarray(), np.inf))
+    print("4.\t", np.linalg.norm(A.toarray() - A_tilde_resketch.toarray(), np.inf))
     A_diana = random_access_optimal_core(A.toarray(), order-1, 2*num_diags_above)
-    print(np.linalg.norm(A.toarray() - A_diana.toarray(), np.inf))
+    print("5.\t", np.linalg.norm(A.toarray() - A_diana.toarray(), np.inf))
     A_diana_matvec = matvecs_optimal_core(A, order-1, 2*num_diags_above, 3*(2*num_diags_above), False)
-    print(np.linalg.norm(A.toarray() - A_diana_matvec.toarray(), np.inf))
+    print("6.\t", np.linalg.norm(A.toarray() - A_diana_matvec.toarray(), np.inf))
 
     # now with a too-small rank
     A_tilde = random_access_greedy_alg(A.toarray(), order, 1)
-    print(np.linalg.norm(A.toarray() - A_tilde.toarray(), np.inf))
+    print("1.\t", np.linalg.norm(A.toarray() - A_tilde.toarray(), np.inf))
     A_tilde_matvec = matvec_alg_unified_sketch(A, order, 1, 3*(2*num_diags_above))
-    print(np.linalg.norm(A.toarray() - A_tilde_matvec.toarray(), np.inf))
+    print("2.\t", np.linalg.norm(A.toarray() - A_tilde_matvec.toarray(), np.inf))
+    A_tilde_matvec_double = matvec_alg_double_unified_sketch(A, order, 1, 3*(2*num_diags_above))
+    print("3.\t", np.linalg.norm(A.toarray() - A_tilde_matvec_double.toarray(), np.inf))
     A_tilde_resketch = matvec_alg_resketch(A, order, 1, 3*(2*num_diags_above))
-    print(np.linalg.norm(A.toarray() - A_tilde_resketch.toarray(), np.inf))
+    print("4.\t", np.linalg.norm(A.toarray() - A_tilde_resketch.toarray(), np.inf))
     A_tilde_diana = random_access_optimal_core(A.toarray(), order, 1)
-    print(np.linalg.norm(A.toarray() - A_tilde_diana.toarray(), np.inf))
+    print("5.\t", np.linalg.norm(A.toarray() - A_tilde_diana.toarray(), np.inf))
     A_tilde_diana_matvec = matvecs_optimal_core(A, order, 1, 3*(2*num_diags_above), True)
-    print(np.linalg.norm(A.toarray() - A_tilde_diana_matvec.toarray(), np.inf))
+    print("6.\t", np.linalg.norm(A.toarray() - A_tilde_diana_matvec.toarray(), np.inf))
 
 # TODO
 # change the tolerance?

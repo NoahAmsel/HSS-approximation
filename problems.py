@@ -25,6 +25,10 @@ def banded_gaussian(N, half_bandwidth):
     return sp.diags_array([np.random.randn(N-abs(offset)) for offset in offsets], offsets=offsets, format='csc')
 
 
+def star_matrix():
+    return np.loadtxt(open("starfish.csv", "rb"), delimiter=",")
+
+
 def grid_schur_complement(partitioned_grid_dimension, other_grid_dimension):
     L = sp.linalg.LaplacianNd((partitioned_grid_dimension, other_grid_dimension), dtype=np.float64).tosparse().tocsc()
     j1 = other_grid_dimension * (partitioned_grid_dimension//2)
