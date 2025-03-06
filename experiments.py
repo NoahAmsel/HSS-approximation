@@ -7,7 +7,7 @@ import pandas as pd
 from pathlib import Path
 from tqdm import tqdm
 import scipy.sparse as sp
-from scipy.sparse.linalg import aslinearoperator as alo
+from scipy.sparse.linalg import aslinearoperator as alo, LinearOperator
 import seaborn as sns
 
 from HSS_approx import matvec_alg_resketch, matvec_alg_unified_sketch, matvecs_optimal_core, random_access_greedy_alg, matvec_alg_double_unified_sketch
@@ -18,23 +18,24 @@ def approx_Frob(A, sketch_size):
     return np.linalg.norm(A @ np.random.randn(A.shape[1], sketch_size), ord='fro') / np.sqrt(sketch_size)
 
 
-# class QueryTracker:
-#     class Counts:
+class QueryTracker(LinearOperator):
+    def __init__(self, A):
+        super().__init__(A.dtype, A.shape)
+        self.A = A
+        self.queries = 0
+        self.transpose_queries = 0
+        self._init_dtype()
 
-#     def __init__(self, A):
-#         self.A = A
-#         self.queries = 0
-#         self.transpose_queries = 0
+    def _matmat(self, x):
+        self.queries += x.shape[1]
+        return self.A @ x
 
-#     def _matmat(self, x):
-#         self.queries += x.shape[1]
-#         return self.A @ x
+    def _rmatmat(self, x):
+        self.transpose_queries += x.shape[1]
+        return self.A.T @ x
 
-#     def _rmatmat(self, x):
-#         self.transpose_queries += x.shape[0]
-#         return x @ self.A
-
-#     def _adjoint(self):
+    def total_queries(self):
+        return self.queries + self.transpose_queries
 
 
 def theorem_4_1_optimality_ratio(sketches_per_level, rank, levels):
@@ -45,7 +46,7 @@ def theorem_4_1_optimality_ratio(sketches_per_level, rank, levels):
     return 2 * gamma_r * (1 + gamma_d) * levels
 
 
-def plot_sketch_size_vs_error(A, title, methods, num_sketches, total_sketches_multiplier, non_sketching_methods={}, repeats=1, approx_frobenius=None, savedir="."):
+def plot_sketch_size_vs_error(A, title, methods, num_sketches, non_sketching_methods={}, repeats=1, approx_frobenius=None, savedir="."):
     Anorm = np.linalg.norm(A) if approx_frobenius is None else approx_Frob(A, approx_frobenius)
     def rel_error(A_tilde):
         error = np.linalg.norm(A_tilde.toarray() - A) if approx_frobenius is None else approx_Frob(alo(A_tilde) - A, approx_frobenius)
@@ -53,11 +54,13 @@ def plot_sketch_size_vs_error(A, title, methods, num_sketches, total_sketches_mu
 
 
     def datum(sketch_dim, method_name, method):
-        # TODO: track total queries by wrapping A in something
+        wrapped_A = QueryTracker(A)
+        error = rel_error(method(wrapped_A, sketch_dim))
         return {
-            "Queries per Sketch": sketch_dim,
             "Method": method_name,
-            "Relative Frobenius Error": rel_error(method(A, sketch_dim)),
+            "Relative Frobenius Error": error,
+            "Queries per Sketch": sketch_dim,
+            "Total Queries": wrapped_A.total_queries(),
         }
 
     # Unfortunately I can't figure out how to parallelize this because I can't pickle A if it's an LU factorization object
@@ -73,7 +76,6 @@ def plot_sketch_size_vs_error(A, title, methods, num_sketches, total_sketches_mu
     non_sketching_results = {method_name: rel_error(method(A)) for method_name, method in non_sketching_methods.items()}
 
     df = pd.DataFrame(sketching_results)
-    df["Total Queries"] = df.apply(lambda x: x["Queries per Sketch"] * total_sketches_multiplier.get(x["Method"], 1), axis=1)
     plt.rcParams.update({"font.size": 14, "font.family": "serif"})
     fig, axs = plt.subplots(1, 2, sharey=True, figsize=(10, 4))
     plt.yscale("log")
@@ -119,7 +121,6 @@ def schur_gunnar():
         title,
         methods,
         np.geomspace(s // 2, s * 2, num=16, endpoint=True, dtype=int),
-        {"Half Fresh Sketches": levels, "Fresh Sketches": 2 * levels},
         repeats=1,
         approx_frobenius=int(1e3),
         savedir="out",
@@ -148,7 +149,6 @@ def schur_smaller(m):
         title,
         methods,
         np.geomspace(s // 2, s * 3 // 2, 30, endpoint=True, dtype=int),
-        {"Half Fresh Sketches": levels, "Fresh Sketches": 2 * levels},
         non_sketching_methods=non_sketching_methods,
         repeats=10,
         approx_frobenius=None,
@@ -172,7 +172,6 @@ def star():
         title,
         methods,
         np.geomspace(2 * r, 8 * r, 20, endpoint=True, dtype=int),
-        {"Half Fresh Sketches": levels, "Fresh Sketches": 2 * levels},
         non_sketching_methods=non_sketching_methods,
         repeats=3,
         savedir="out",
@@ -201,7 +200,6 @@ def banded_inverse(levels, num_diags_above, r=None):
         title,
         methods,
         np.geomspace(min_queries(A, recovery_levels), 8 * r, 20, endpoint=True, dtype=int),
-        {"Half Fresh Sketches": levels, "Fresh Sketches": 2 * levels},
         non_sketching_methods=non_sketching_methods,
         repeats=10,
         approx_frobenius=int(1e3),
@@ -228,7 +226,6 @@ def two_factor(logN, eps):
         title,
         methods,
         np.geomspace(min_queries(A, level), N*20, 30, endpoint=True, dtype=int),
-        {"Half Fresh Sketches": (level - top_level), "Fresh Sketches": 2 * (level - top_level), "Double Recycled Sketch": 2},
         non_sketching_methods=non_sketching_methods,
         repeats=5,
         savedir="out",
@@ -254,7 +251,6 @@ def spike(A, level: int, rank: int, top_level: int):
         title,
         methods,
         all_num_sketches,
-        {"Half Fresh Sketches": (level - top_level), "Fresh Sketches": 2 * (level - top_level), "Double Recycled Sketch": 2},
         repeats=5,
         savedir="out",
     )
@@ -281,8 +277,8 @@ if __name__ == "__main__":
     # schur_smaller(4)
     # banded_inverse(levels=12, num_diags_above=5)
     # banded_inverse(levels=12, num_diags_above=5, r=5)
-    # star()
-    gaussian_spike()
+    star()
+    # gaussian_spike()
 
 # TODO! Redo everything with a leaf size > 1.
 # The problem is that currently, our algs assume we're going all the way to the diagonal
