@@ -14,6 +14,9 @@ from HSS_approx import matvec_alg_resketch, matvec_alg_unified_sketch, matvecs_o
 from problems import banded_gaussian, factor2_example, factor2_optimal_solution, grid_schur_complement, SparseInverse, star_matrix
 
 
+global_show_title = True
+
+
 def approx_Frob(A, sketch_size):
     return np.linalg.norm(A @ np.random.randn(A.shape[1], sketch_size), ord='fro') / np.sqrt(sketch_size)
 
@@ -46,7 +49,7 @@ def theorem_4_1_optimality_ratio(sketches_per_level, rank, levels):
     return 2 * gamma_r * (1 + gamma_d) * levels
 
 
-def plot_sketch_size_vs_error(A, title, methods, num_sketches, non_sketching_methods={}, repeats=1, approx_frobenius=None, savedir="."):
+def plot_sketch_size_vs_error(A, title, methods, num_sketches, non_sketching_methods={}, repeats=1, approx_frobenius=None, savedir=".", xscale="linear"):
     Anorm = np.linalg.norm(A) if approx_frobenius is None else approx_Frob(A, approx_frobenius)
     def rel_error(A_tilde):
         error = np.linalg.norm(A_tilde.toarray() - A) if approx_frobenius is None else approx_Frob(alo(A_tilde) - A, approx_frobenius)
@@ -58,7 +61,7 @@ def plot_sketch_size_vs_error(A, title, methods, num_sketches, non_sketching_met
         error = rel_error(method(wrapped_A, sketch_dim))
         return {
             "Method": method_name,
-            "Relative Frobenius Error": error,
+            "Relative\nFrobenius Error": error,
             "Queries per Sketch": sketch_dim,
             "Total Queries": wrapped_A.total_queries(),
         }
@@ -76,25 +79,30 @@ def plot_sketch_size_vs_error(A, title, methods, num_sketches, non_sketching_met
     non_sketching_results = {method_name: rel_error(method(A)) for method_name, method in non_sketching_methods.items()}
 
     df = pd.DataFrame(sketching_results)
-    plt.rcParams.update({"font.size": 14, "font.family": "serif"})
-    fig, axs = plt.subplots(1, 2, sharey=True, figsize=(10, 4))
+    plt.rcParams.update({"text.usetex": True, "font.family": "serif", "font.size": 18, "legend.fontsize": 15})
+    fig, axs = plt.subplots(1, 2, sharey=True, figsize=(10, 3.5))
     plt.yscale("log")
-    plt.suptitle(title + "\n")
+    if global_show_title:
+        plt.suptitle(title + "\n")
+        bbox_to_anchor=(0,0,1,.825)
+    else:
+        plt.suptitle("\n")
+        bbox_to_anchor=(0,0,1,.92)
     for i, (ax, x_col) in enumerate(zip(axs, ["Queries per Sketch", "Total Queries"])):
         # NOTE: This assumes that these non sketching methods are deterministic
         for (method_name, method_result), style in zip(non_sketching_results.items(), ['-.', ':']):
             ax.axhline(method_result, label=method_name, color='black', linestyle=style)
-        p = sns.lineplot(df, x=x_col, y="Relative Frobenius Error", hue="Method", style="Method", errorbar=("ci", 95), marker='o', ax=ax, legend=(i == 1))
-        ax.set_xscale("log")
+        p = sns.lineplot(df, x=x_col, y="Relative\nFrobenius Error", hue="Method", style="Method", errorbar=("ci", 100), marker='o', ax=ax, legend=(i == 1))
+        ax.set_xscale(xscale)
         if i == 1:
             # fuller_grid = np.geomspace(df["Queries per Sketch"].min(), df["Queries per Sketch"].max(), num=100)
             # ax.plot(fuller_grid, method_result * theorem_4_1_optimality_ratio(fuller_grid, rank=RANK, levels=LEVELS), color='black', linestyle=style)
             handles, labels = ax.get_legend_handles_labels()
             ax.get_legend().remove()
-            plt.figlegend(handles, labels, loc='outside upper center', bbox_to_anchor=(0,0,1,.825), ncol=len(methods)+len(non_sketching_methods), labelspacing=0., prop={'size': 10})
+            plt.figlegend(handles, labels, loc='outside upper center', bbox_to_anchor=bbox_to_anchor, ncol=len(methods)+len(non_sketching_methods), labelspacing=0.)
     Path(savedir).mkdir(parents=True, exist_ok=True)
     plt.tight_layout()
-    fig.get_figure().savefig(Path(savedir) / f"{title.replace("\n", "")}.pdf", dpi=600)
+    fig.get_figure().savefig(Path(savedir) / f"{title.translate(str.maketrans({'\n': '', '$': '', '\\': ''}))}.pdf", dpi=600)
 
 
 def min_queries(A, recovery_levels):
@@ -123,58 +131,59 @@ def schur_gunnar():
         np.geomspace(s // 2, s * 2, num=16, endpoint=True, dtype=int),
         repeats=1,
         approx_frobenius=int(1e3),
-        savedir="out",
+        savedir="out/schur",
     )
 
 
-def schur_smaller(m):
-    n = 51  # the dimension that we split on. Groups are 25 x N, 25 x N, and 1 x N
-    levels = 4
-    N = m * (2**levels)
-    A = grid_schur_complement(n, N)
+def schur_smaller():
     r = 10
-    s = max(r+m, 3*r)  # sketching dimension. given in beginning of experiments section and beginning of sec. 4
+    m = r  # leaf size
+    n = 51  # the dimension that we split on. Groups are 25 x N, 25 x N, and 1 x N
+    levels = 6
+    N = m * (2**(levels+1))
+    A = grid_schur_complement(n, N)
 
-    recovery_rank = r
-    title = f"Grid Schur Complement:\nn={n},N={N},m={m},k={recovery_rank}"
+    title = "Grid Schur Complement:\n" + rf"$N={N},L={levels},k={r}$"
     methods = {
-        "Fresh Sketches": lambda A, s: matvec_alg_resketch(A, levels, recovery_rank, s),
-        "Half Fresh Sketches": lambda A, s: matvec_alg_resketch(A, levels, recovery_rank, s, second_sketch_for_D=False),
-        "Recycled Sketch": lambda A, s: matvec_alg_unified_sketch(A, levels, recovery_rank, s),
+        "Fresh Sketches": lambda A, s: matvec_alg_resketch(A, levels, r, s),
+        # "Half Fresh Sketches": lambda A, s: matvec_alg_resketch(A, levels, recovery_rank, s, second_sketch_for_D=False),
+        "Recycled Sketch": lambda A, s: matvec_alg_unified_sketch(A, levels, r, s),
     }
     A = A @ np.eye(*A.shape)
     non_sketching_methods = {"Random Access": lambda A: random_access_greedy_alg(A, levels, r)}
+    min_q = max(3*r, min_queries(A, levels))
     plot_sketch_size_vs_error(
         A,
         title,
         methods,
-        np.geomspace(s // 2, s * 3 // 2, 30, endpoint=True, dtype=int),
+        np.linspace(min_q, 4*min_q, 20, endpoint=True, dtype=int),
         non_sketching_methods=non_sketching_methods,
         repeats=10,
         approx_frobenius=None,
-        savedir="out",
+        savedir="out/schur",
     )
 
 
 def star():
     A = star_matrix()
-    title = "Boundary Integral Equation"
     levels = 5
     r = 30
+    title = "Boundary Integral Operator\n" + rf"$N = {A.shape[0]}, L={levels}, k={r}$"
     methods = {
         "Fresh Sketches": lambda A, s: matvec_alg_resketch(A, levels, r, s),
-        "Half Fresh Sketches": lambda A, s: matvec_alg_resketch(A, levels, r, s, second_sketch_for_D=False),
+        # "Half Fresh Sketches": lambda A, s: matvec_alg_resketch(A, levels, r, s, second_sketch_for_D=False),
         "Recycled Sketch": lambda A, s: matvec_alg_unified_sketch(A, levels, r, s),
     }
     non_sketching_methods = {"Random Access": lambda A: random_access_greedy_alg(A, levels, r)}
+    min_sketches = max(3*r, min_queries(A, levels))
     plot_sketch_size_vs_error(
         A,
         title,
         methods,
-        np.geomspace(2 * r, 8 * r, 20, endpoint=True, dtype=int),
+        np.linspace(min_sketches, 4 * min_sketches, 20, endpoint=True, dtype=int),
         non_sketching_methods=non_sketching_methods,
-        repeats=3,
-        savedir="out",
+        repeats=10,
+        savedir="out/star",
     )
 
 
@@ -184,51 +193,52 @@ def banded_inverse(levels, num_diags_above, r=None):
         r = 2 * num_diags_above
     # banded inverse
     A = SparseInverse(banded_gaussian(2**levels, num_diags_above))
-    title = f"Banded:\nnum_diag={num_diags_above},level={levels},k={r}"
-
     # to ensure that blocksize >= r, use slightly larger blocksize when necessary
     recovery_levels = int(np.floor(np.log2(A.shape[0] / r)))
+    title = "Banded Matrix\n" + rf"$N = {A.shape[0]}, L = {recovery_levels}, b = {2*num_diags_above + 1}, k = {r}$"
 
     methods = {
         "Fresh Sketches": lambda A, s: matvec_alg_resketch(A, recovery_levels, r, s),
-        "Half Fresh Sketches": lambda A, s: matvec_alg_resketch(A, recovery_levels, r, s, second_sketch_for_D=False),
+        # "Half Fresh Sketches": lambda A, s: matvec_alg_resketch(A, recovery_levels, r, s, second_sketch_for_D=False),
         "Recycled Sketch": lambda A, s: matvec_alg_unified_sketch(A, recovery_levels, r, s),
     }
     non_sketching_methods = {"Random Access": lambda A: random_access_greedy_alg(A.toarray(), levels, r)}
+    min_q = max(3*r, min_queries(A, levels))
     plot_sketch_size_vs_error(
         A,
         title,
         methods,
-        np.geomspace(min_queries(A, recovery_levels), 8 * r, 20, endpoint=True, dtype=int),
+        np.linspace(min_q, 4 * min_q, 20, endpoint=True, dtype=int),
         non_sketching_methods=non_sketching_methods,
         repeats=10,
         approx_frobenius=int(1e3),
-        savedir="out",
+        savedir="out/banded_inverse",
     )
 
 
-def two_factor(logN, eps):
-    N = 2 ** logN
-    A = factor2_example(N, eps)
-    level = logN
+def two_factor(level, eps):
+    blocks = 2 ** level
+    A = factor2_example(blocks, eps)
     rank = 1
     top_level = 0
     methods = {
         "Fresh Sketches": lambda A, s: matvec_alg_resketch(A, level, rank, s, top_level=top_level),
-        "Half Fresh Sketches": lambda A, s: matvec_alg_resketch(A, level, rank, s, top_level=top_level, second_sketch_for_D=False),
+        # "Half Fresh Sketches": lambda A, s: matvec_alg_resketch(A, level, rank, s, top_level=top_level, second_sketch_for_D=False),
         "Recycled Sketch": lambda A, s: matvec_alg_unified_sketch(A, level, rank, s, top_level=top_level),
-        "Double Recycled Sketch": lambda A, s: matvec_alg_double_unified_sketch(A, level, rank, s, top_level=top_level),
+        # "Double Recycled Sketch": lambda A, s: matvec_alg_double_unified_sketch(A, level, rank, s, top_level=top_level),
     }
-    non_sketching_methods = {"Greedy": lambda A: random_access_greedy_alg(A, level, rank, top_level=top_level), "Optimal": lambda _: factor2_optimal_solution(N)}
-    title = f"Hard Construction\nN={N},eps={eps}"
+    non_sketching_methods = {"Random Access": lambda A: random_access_greedy_alg(A, level, rank, top_level=top_level), "Optimal": lambda _: factor2_optimal_solution(blocks)}
+    title = "Hard Construction\n" + rf"$N={A.shape[0]},L={level},k={rank},\delta={eps}$"
+    min_q = max(3*rank, min_queries(A, level))
     plot_sketch_size_vs_error(
         A,
         title,
         methods,
-        np.geomspace(min_queries(A, level), N*20, 30, endpoint=True, dtype=int),
+        np.geomspace(min_q, 96 * min_q, 20, endpoint=True, dtype=int),
         non_sketching_methods=non_sketching_methods,
-        repeats=5,
-        savedir="out",
+        repeats=10,
+        savedir="out/two_factor",
+        xscale="log",
     )
 
 
@@ -252,7 +262,7 @@ def spike(A, level: int, rank: int, top_level: int):
         methods,
         all_num_sketches,
         repeats=5,
-        savedir="out",
+        savedir="out/spike",
     )
 
 
@@ -265,7 +275,21 @@ def gaussian_spike():
     spike(A, level, rank, top_level)
 
 
+# TODO!
+# convex combo of random HSS with s.v.'s of all blocks = 1 and random gaussian. check for the spike
+# also, try adding a large diagonal element instead of random gaussian and see if that throws us off. maybe that will motivate double sided diagonal recovery
+# in cases where A really isn't close to U_l U_l^T A V_l V_l^T, we expect recycling sketches to hurt. but haven't found a good example yet
+# diana: take an exact telescoping factorization and just perturb the top level U and V
+
+
 if __name__ == "__main__":
+    global_show_title = False
+    two_factor(4, 0.1)
+    schur_smaller()
+    banded_inverse(levels=12, num_diags_above=8, r=8)
+    star()
+
+
     # two_factor(9, 0.1)
     # two_factor(9, 0.01)
     # two_factor(9, 0.001)  # SPIKE
@@ -277,7 +301,6 @@ if __name__ == "__main__":
     # schur_smaller(4)
     # banded_inverse(levels=12, num_diags_above=5)
     # banded_inverse(levels=12, num_diags_above=5, r=5)
-    star()
     # gaussian_spike()
 
 # TODO! Redo everything with a leaf size > 1.

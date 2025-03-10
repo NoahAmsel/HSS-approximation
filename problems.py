@@ -48,21 +48,21 @@ def grid_schur_complement_levels(partitioned_grid_dimension, leaf_size, levels):
     return grid_schur_complement(partitioned_grid_dimension, leaf_size*(2**levels))
 
 
-def factor2_example(N, eps):
-    assert N % 2 == 0
+def factor2_example(blocks, eps):
+    assert blocks % 2 == 0
     off_diagonal = np.array([[0, 1+eps], [1, 0]])
     eye = np.eye(2)
     zero = np.zeros((2, 2))
     def block(i, j):
         if i == j:
             return zero
-        if i + j == N - 1:
+        if i + j == blocks - 1:
             return off_diagonal
         else:
             return eye
-    return np.block([[block(i, j) for i in range(N)] for j in range(N)])
+    return np.block([[block(i, j) for i in range(blocks)] for j in range(blocks)])
 
 
-def factor2_optimal_solution(N):
-    block_diag_ones = sp.block_diag([np.ones((2, 1)) for _ in range(N)])
-    return FourPartLens(block_diag_ones, 0.5 * np.ones((N, N)), block_diag_ones, sp.block_diag([-np.ones((2, 2)) for _ in range(N)]))
+def factor2_optimal_solution(blocks):
+    block_diag_ones = sp.block_diag([np.ones((2, 1)) for _ in range(blocks)])
+    return FourPartLens(block_diag_ones, 0.5 * np.ones((blocks, blocks)), block_diag_ones, sp.block_diag([-np.ones((2, 2)) for _ in range(blocks)]))

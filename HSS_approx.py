@@ -25,12 +25,67 @@ def diagblock(A, level, block_i):
     return A[start:end, start:end]
 
 
+# class AlgIter:
+#     def rowblock_x_diag(self, block_i):
+#         pass
+
+#     def colblock_x_diag(self, block_i):
+#         pass
+
+#     def get_D(self, block_i, U_i, V_i):
+#         pass
+
+#     def setup_next_level(self, U_l, V_l, D_l):
+#         pass
+
+#     def main(self):
+#         if self.level == self.top_level:
+#             return self.recover_last_level()
+#         # TODO: replace with sklearn TruncatedSVD or with scipy.sparse.svds
+#         U_l_list = [np.linalg.svd(self.rowblock_x_diag(block_i), full_matrices=False).U[:, :self.rank] for block_i in range(2**self.level)]
+#         U_l = sp.block_diag(U_l_list)
+#         # TODO: take conjugate transpose, not plain transpose. (or better yet, just switch this to be identical to above line but with A^* instead of A)
+#         V_l_list = [np.linalg.svd(self.colblock_x_diag(block_i), full_matrices=False).U[:, :self.rank] for block_i in range(2**self.level)]
+#         V_l = sp.block_diag(V_l_list)
+#         D_l = sp.block_diag([self.D(U_l_list[block_i], V_l_list[block_i], block_i) for block_i in range(2**self.level)])
+#         A_lminus1 = self.setup_next_level(U_l, V_l, D_l).main()
+#         return FourPartLens(U_l, A_lminus1, V_l, D_l)
+
+# def RandomAccess(AlgIter):
+#     def __init__(self, A, level, rank, top_level):
+#         self.A = A
+#         self.level
+#         self.rank
+#         self.top_level
+
+#     def rowblock_x_diag(self, block_i):
+#         rowblock_x_diag(self.A, self.level, block_i)
+
+#     def colblock_x_diag(self, block_i):
+#         self.rowblock_x_diag(self.A.T, block_i)
+
+#     def get_D(self, block_i, U_i, V_i):
+#         return diagblock(self.A, self.level, block_i)
+
+#     def setup_next_level(self, U_l, V_l, D_l):
+#         return type(self)(
+#             np.asarray(U_l.T @ (self.A - D_l) @ V_l),
+#             self.level-1,
+#             self.rank,
+#             self.top_level,
+#         )
+
+#     @classmethod
+#     def __call__(cls, A, level, rank, top_level):
+#         return cls(A, level, rank, top_level).main()
+
+
 # TODO! block_diag is outputting COO format.
 # we should use CSR for U and D, and CSC for V
 def random_access_greedy_alg(A: np.ndarray, level: int, r: int, top_level: int = 0):
     if level == top_level:
         return A
-    # replace with sklearn TruncatedSVD or with scipy.sparse.svds
+    # TODO: replace with sklearn TruncatedSVD or with scipy.sparse.svds
     U_l = sp.block_diag([np.linalg.svd(rowblock_x_diag(A, level, block_i), full_matrices=False).U[:, :r] for block_i in range(2**level)])
     # TODO: take conjugate transpose, not plain transpose. (or better yet, just switch this to be identical to above line but with A^* instead of A)
     V_l = sp.block_diag([np.linalg.svd(colblock_x_diag(A, level, block_i), full_matrices=False).Vh.T[:, :r] for block_i in range(2**level)])
@@ -115,40 +170,45 @@ def blockwise_right_pseudoinv(X, Y, level):
     return sp.block_diag([right_pseudoinv(rowblock(X, level, block_i), rowblock(Y, level, block_i)) for block_i in range(2**level)])
 
 
-def matvec_alg_unified_sketch_helper(Omega1, AOmega1, Omega2, ATOmega2, level: int, r: int, top_level: int):
-    if level == top_level:
-        # NOTE this isn't symmetric in approximate case
-        return right_pseudoinv(AOmega1, Omega1)
-    U_l = sp.block_diag([np.linalg.svd(rowblock(AOmega1, level, block_i) @ row_nullifier(Omega1, level, block_i), full_matrices=False).U[:, :r] for block_i in range(2**level)])
-    V_l = sp.block_diag([np.linalg.svd(rowblock(ATOmega2, level, block_i) @ row_nullifier(Omega2, level, block_i), full_matrices=False).U[:, :r] for block_i in range(2**level)])
-    # TODO! instead of this diagonal recovery, do a two sided least squares solve to recover the diagonal blocks.
-    # each block is a pretty small least squares problem
-    # then just find D - UU^T D VV^T explicitly
-    # to see the effect in the experiments, just try adding some huge random entries on the diagonal blocks
-    Dpart1 = blockwise_right_pseudoinv(AOmega1 - U_l @ (U_l.T @ AOmega1), Omega1, level)
-    Dpart2 = U_l @ (U_l.T @ blockwise_right_pseudoinv(ATOmega2 - V_l @ (V_l.T @ ATOmega2), Omega2, level).T)
-    D_l = Dpart1 + Dpart2
-    newOmega1 = V_l.T @ Omega1
-    newAOmega1 = U_l.T @ (AOmega1 - D_l @ Omega1)
-    newOmega2 = U_l.T @ Omega2
-    newATOmega2 = V_l.T @ (ATOmega2 - D_l.T @ Omega2)
-    A_lminus1 = matvec_alg_unified_sketch_helper(newOmega1, newAOmega1, newOmega2, newATOmega2, level-1, r, top_level)
-    return FourPartLens(U_l, A_lminus1, V_l, D_l)
+# def matvec_alg_unified_sketch_helper(Omega1, AOmega1, Omega2, ATOmega2, level: int, r: int, top_level: int):
+#     if level == top_level:
+#         # NOTE this isn't symmetric in approximate case
+#         return right_pseudoinv(AOmega1, Omega1)
+#     U_l = sp.block_diag([np.linalg.svd(rowblock(AOmega1, level, block_i) @ row_nullifier(Omega1, level, block_i), full_matrices=False).U[:, :r] for block_i in range(2**level)])
+#     V_l = sp.block_diag([np.linalg.svd(rowblock(ATOmega2, level, block_i) @ row_nullifier(Omega2, level, block_i), full_matrices=False).U[:, :r] for block_i in range(2**level)])
+#     # TODO! instead of this diagonal recovery, do a two sided least squares solve to recover the diagonal blocks.
+#     # each block is a pretty small least squares problem
+#     # then just find D - UU^T D VV^T explicitly
+#     # to see the effect in the experiments, just try adding some huge random entries on the diagonal blocks
+#     Dpart1 = blockwise_right_pseudoinv(AOmega1 - U_l @ (U_l.T @ AOmega1), Omega1, level)
+#     Dpart2 = U_l @ (U_l.T @ blockwise_right_pseudoinv(ATOmega2 - V_l @ (V_l.T @ ATOmega2), Omega2, level).T)
+#     D_l = Dpart1 + Dpart2
+#     newOmega1 = V_l.T @ Omega1
+#     newAOmega1 = U_l.T @ (AOmega1 - D_l @ Omega1)
+#     newOmega2 = U_l.T @ Omega2
+#     newATOmega2 = V_l.T @ (ATOmega2 - D_l.T @ Omega2)
+#     A_lminus1 = matvec_alg_unified_sketch_helper(newOmega1, newAOmega1, newOmega2, newATOmega2, level-1, r, top_level)
+#     return FourPartLens(U_l, A_lminus1, V_l, D_l)
 
 
-def matvec_alg_unified_sketch(A, level: int, r: int, num_sketches:int, top_level: int = 0):
+def matvec_alg_unified_sketch(A, level: int, r: int, num_sketches:int, top_level: int = 0, two_sided_pseudoinverse: bool = False):
     left_Omega = np.random.randn(A.shape[0], num_sketches)
     right_Omega = np.random.randn(A.shape[1], num_sketches)
-    return matvec_alg_unified_sketch_helper(right_Omega, A @ right_Omega, left_Omega, A.T @ left_Omega, level, r, top_level=top_level)
+    A_right_Omega = A @ right_Omega
+    AT_left_Omega = A.T @ left_Omega
+    return matvec_alg_double_unified_sketch_helper(
+        right_Omega, A_right_Omega, left_Omega, AT_left_Omega,
+        right_Omega, A_right_Omega, left_Omega, AT_left_Omega,
+        level, r, top_level=top_level, two_sided_pseudoinverse=two_sided_pseudoinverse
+    )
 
 
-def matvec_alg_double_unified_sketch_helper(Omega1, AOmega1, Omega2, ATOmega2, tilde_Omega1, tilde_AOmega1, tilde_Omega2, tilde_ATOmega2, level: int, r: int, top_level: int):
+def matvec_alg_double_unified_sketch_helper(Omega1, AOmega1, Omega2, ATOmega2, tilde_Omega1, tilde_AOmega1, tilde_Omega2, tilde_ATOmega2, level: int, r: int, top_level: int, two_sided_pseudoinverse: bool = False):
     if level == top_level:
-        # NOTE this isn't symmetric in approximate case
-        # return right_pseudoinv(AOmega1, Omega1)
-        # return right_pseudoinv(tilde_AOmega1, tilde_Omega1)
-        return two_sided_lstsq(tilde_Omega1, tilde_AOmega1, tilde_Omega2, tilde_ATOmega2)
-        # return two_sided_iterative(tilde_Omega1, tilde_AOmega1, tilde_Omega2, tilde_ATOmega2)
+        if two_sided_pseudoinverse:
+            return two_sided_iterative(tilde_Omega1, tilde_AOmega1, tilde_Omega2, tilde_ATOmega2)
+        else:
+            return right_pseudoinv(tilde_AOmega1, tilde_Omega1)
     U_l = sp.block_diag([np.linalg.svd(rowblock(AOmega1, level, block_i) @ row_nullifier(Omega1, level, block_i), full_matrices=False).U[:, :r] for block_i in range(2**level)])
     V_l = sp.block_diag([np.linalg.svd(rowblock(ATOmega2, level, block_i) @ row_nullifier(Omega2, level, block_i), full_matrices=False).U[:, :r] for block_i in range(2**level)])
     # TODO! instead of this diagonal recovery, do a two sided least squares solve to recover the diagonal blocks.
@@ -170,7 +230,7 @@ def matvec_alg_double_unified_sketch_helper(Omega1, AOmega1, Omega2, ATOmega2, t
     return FourPartLens(U_l, A_lminus1, V_l, D_l)
 
 
-def matvec_alg_double_unified_sketch(A, level: int, r: int, num_sketches:int, top_level: int = 0):
+def matvec_alg_double_unified_sketch(A, level: int, r: int, num_sketches:int, top_level: int = 0, two_sided_pseudoinverse: bool = False):
     left_Omega = np.random.randn(A.shape[0], num_sketches)
     right_Omega = np.random.randn(A.shape[1], num_sketches)
     tilde_left_Omega = np.random.randn(A.shape[0], num_sketches)
@@ -178,7 +238,7 @@ def matvec_alg_double_unified_sketch(A, level: int, r: int, num_sketches:int, to
     return matvec_alg_double_unified_sketch_helper(
         right_Omega, A @ right_Omega, left_Omega, A.T @ left_Omega,
         tilde_right_Omega, A @ tilde_right_Omega, tilde_left_Omega, A.T @ tilde_left_Omega,
-        level, r, top_level=top_level
+        level, r, top_level=top_level, two_sided_pseudoinverse=two_sided_pseudoinverse
     )
 
 
@@ -325,7 +385,8 @@ def matvecs_optimal_core_helper(Omega1, AOmega1, Omega2, ATOmega2, level: int, r
     degrees_of_freedom = sum(r**2 * 2**l for l in range(level, 0, -1)) + AOmega1.shape[0] * ATOmega2.shape[0] // (2**level)
     # NOTE: you can adjust the tolerance here
     # TODO: we should warm start by stitching smaller linear systems
-    a_star = sp.linalg.lsmr(LinearOperator(shape=(AOmega1.shape[0]*AOmega1.shape[1] + ATOmega2.shape[0]*ATOmega2.shape[1], degrees_of_freedom), matvec=matvec, rmatvec=rmatvec), np.concat((AOmega1.flatten(), ATOmega2.flatten())), show=True, atol=1e-14, btol=1e-14)[0]  # atol=1e-9, btol=1e-9
+    # TODO: consider lsmr instead
+    a_star = sp.linalg.lsqr(LinearOperator(shape=(AOmega1.shape[0]*AOmega1.shape[1] + ATOmega2.shape[0]*ATOmega2.shape[1], degrees_of_freedom), matvec=matvec, rmatvec=rmatvec), np.concat((AOmega1.flatten(), ATOmega2.flatten())), show=False, atol=1e-9, btol=1e-9)[0]
     return assembleHSS(cummulativeUs, a_star, cummulativeVs, level, r)
 
 
