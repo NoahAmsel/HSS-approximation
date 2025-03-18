@@ -1,3 +1,5 @@
+% First install chunkie: https://chunkie.readthedocs.io/en/latest/
+
 kernsp = kernel('lap','sprime');
 
 % get a chunker discretization of a starfish domain

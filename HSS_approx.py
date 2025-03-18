@@ -3,6 +3,7 @@ import numpy as np
 import operator
 import scipy.sparse as sp
 from scipy.sparse.linalg import aslinearoperator as alo, LinearOperator
+from scipy.sparse.linalg._interface import IdentityOperator
 
 from structures import FourPartLens
 
@@ -159,8 +160,9 @@ def two_sided_iterative(Omega1, AOmega1, Omega2, ATOmega2):
         vec(ATOmega2.T),
     ))
     warm_start = vec(right_pseudoinv(AOmega1, Omega1))
-    vec_a = sp.linalg.lsqr(LHS, RHS, x0=warm_start)[0]
-    return unvec(vec_a, Arows)
+    result = sp.linalg.lsqr(LHS, RHS, x0=warm_start, atol=1e-16, btol=1e-16)
+    # assert result[1] < 7, result
+    return unvec(result[0], Arows)
 
 
 def blockwise_right_pseudoinv(X, Y, level):
@@ -209,15 +211,30 @@ def matvec_alg_double_unified_sketch_helper(Omega1, AOmega1, Omega2, ATOmega2, t
             return two_sided_iterative(tilde_Omega1, tilde_AOmega1, tilde_Omega2, tilde_ATOmega2)
         else:
             return right_pseudoinv(tilde_AOmega1, tilde_Omega1)
-    U_l = sp.block_diag([np.linalg.svd(rowblock(AOmega1, level, block_i) @ row_nullifier(Omega1, level, block_i), full_matrices=False).U[:, :r] for block_i in range(2**level)])
-    V_l = sp.block_diag([np.linalg.svd(rowblock(ATOmega2, level, block_i) @ row_nullifier(Omega2, level, block_i), full_matrices=False).U[:, :r] for block_i in range(2**level)])
-    # TODO! instead of this diagonal recovery, do a two sided least squares solve to recover the diagonal blocks.
-    # each block is a pretty small least squares problem
-    # then just find D - UU^T D VV^T explicitly
-    # to see the effect in the experiments, just try adding some huge random entries on the diagonal blocks
-    Dpart1 = blockwise_right_pseudoinv(tilde_AOmega1 - U_l @ (U_l.T @ tilde_AOmega1), tilde_Omega1, level)
-    Dpart2 = U_l @ (U_l.T @ blockwise_right_pseudoinv(tilde_ATOmega2 - V_l @ (V_l.T @ tilde_ATOmega2), tilde_Omega2, level).T)
-    D_l = Dpart1 + Dpart2
+    U_l_list = [np.linalg.svd(rowblock(AOmega1, level, block_i) @ row_nullifier(Omega1, level, block_i), full_matrices=False).U[:, :r] for block_i in range(2**level)]
+    U_l = sp.block_diag(U_l_list)
+    V_l_list = [np.linalg.svd(rowblock(ATOmega2, level, block_i) @ row_nullifier(Omega2, level, block_i), full_matrices=False).U[:, :r] for block_i in range(2**level)]
+    V_l = sp.block_diag(V_l_list)
+    if two_sided_pseudoinverse:
+        # TODO! instead of this diagonal recovery, do a two sided least squares solve to recover the diagonal blocks.
+        # each block is a pretty small least squares problem
+        # then just find D - UU^T D VV^T explicitly
+        # to see the effect in the experiments, just try adding some huge random entries on the diagonal blocks
+        Uorth_list = [IdentityOperator((U_l_i.shape[0], U_l_i.shape[0])) - alo(U_l_i) @ alo(U_l_i).T for U_l_i in U_l_list]
+        Vorth_list = [IdentityOperator((V_l_i.shape[0], V_l_i.shape[0])) - alo(V_l_i) @ alo(V_l_i).T for V_l_i in V_l_list]
+        # approx_A_ll = sp.block_diag([
+        #     two_sided_iterative(rowblock(tilde_Omega1, level, block_i), rowblock(tilde_AOmega1, level, block_i), rowblock(tilde_Omega2, level, block_i), rowblock(tilde_ATOmega2, level, block_i))
+        #     for block_i in range(2**level)
+        # ])
+        approx_A_ll = sp.block_diag([
+            two_sided_lstsq(rowblock(tilde_Omega1, level, block_i), Uorth_list[block_i] @ rowblock(tilde_AOmega1, level, block_i), rowblock(tilde_Omega2, level, block_i), Vorth_list[block_i] @ rowblock(tilde_ATOmega2, level, block_i))
+            for block_i in range(2**level)
+        ])
+        D_l = approx_A_ll - U_l @ ((U_l.T @ approx_A_ll) @ V_l) @ V_l.T
+    else:
+        Dpart1 = blockwise_right_pseudoinv(tilde_AOmega1 - U_l @ (U_l.T @ tilde_AOmega1), tilde_Omega1, level)
+        Dpart2 = U_l @ (U_l.T @ blockwise_right_pseudoinv(tilde_ATOmega2 - V_l @ (V_l.T @ tilde_ATOmega2), tilde_Omega2, level).T)
+        D_l = Dpart1 + Dpart2
     newOmega1 = V_l.T @ Omega1
     newAOmega1 = U_l.T @ (AOmega1 - D_l @ Omega1)
     newOmega2 = U_l.T @ Omega2
@@ -243,13 +260,18 @@ def matvec_alg_double_unified_sketch(A, level: int, r: int, num_sketches:int, to
 
 
 def matvec_alg_resketch(A, level: int, r: int, num_sketches_per_level: int, top_level: int = 0, second_sketch_for_D: bool = True):
+    if level == top_level:
+        if num_sketches_per_level >= A.shape[1]:
+            return A @ IdentityOperator((A.shape[1], A.shape[1]))
+        else:
+            Omega1 = np.random.randn(A.shape[1], num_sketches_per_level)
+            AOmega1 = A @ Omega1
+            # NOTE this isn't symmetric in approximate case
+            return right_pseudoinv(AOmega1, Omega1)
     Omega1 = np.random.randn(A.shape[1], num_sketches_per_level)
     AOmega1 = A @ Omega1
     Omega2 = np.random.randn(A.shape[0], num_sketches_per_level)
     ATOmega2 = A.T @ Omega2
-    if level == top_level:
-        # NOTE this isn't symmetric in approximate case
-        return right_pseudoinv(AOmega1, Omega1)
     U_l = sp.block_diag([np.linalg.svd(rowblock(AOmega1, level, block_i) @ row_nullifier(Omega1, level, block_i), full_matrices=False).U[:, :r] for block_i in range(2**level)])
     V_l = sp.block_diag([np.linalg.svd(rowblock(ATOmega2, level, block_i) @ row_nullifier(Omega2, level, block_i), full_matrices=False).U[:, :r] for block_i in range(2**level)])
     if second_sketch_for_D:
@@ -411,7 +433,9 @@ if False:
     from problems import banded_gaussian, SparseInverse
     order = 3 # 8
     num_diags_above = 1
-    A = SparseInverse(banded_gaussian(2**order, num_diags_above))
+    A = SparseInverse(banded_gaussian(2*num_diags_above * 2**(order+1), num_diags_above))
+    print("orig", A.shape)
+    print("expected", 2 * 2*num_diags_above)
     A_tilde = random_access_greedy_alg(A.toarray(), order, 2*num_diags_above)
     print("1.\t", np.linalg.norm(A.toarray() - A_tilde.toarray(), np.inf))
     A_tilde_matvec = matvec_alg_unified_sketch(A, order, 2*num_diags_above, 3*(2*num_diags_above))

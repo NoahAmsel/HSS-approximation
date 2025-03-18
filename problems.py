@@ -66,3 +66,16 @@ def factor2_example(blocks, eps):
 def factor2_optimal_solution(blocks):
     block_diag_ones = sp.block_diag([np.ones((2, 1)) for _ in range(blocks)])
     return FourPartLens(block_diag_ones, 0.5 * np.ones((blocks, blocks)), block_diag_ones, sp.block_diag([-np.ones((2, 2)) for _ in range(blocks)]))
+
+
+def random_hss(level, r=1, diag_weight=0):
+    if level == 0:
+        # return np.random.randn(2*r, 2*r)
+        return np.eye(2*r, 2*r)
+    else:
+        U_l = sp.block_diag([np.random.randn(2*r, r) for _ in range(2**level)])
+        A_lminus1 = random_hss(level-1, r=r)
+        V_l = sp.block_diag([np.random.randn(2*r, r) for _ in range(2**level)])
+        # D_l = diag_weight * sp.block_diag([np.random.randn(2*r, 2*r) for _ in range(2**level)])
+        D_l = diag_weight * sp.block_diag([np.eye(2*r, 2*r) for _ in range(2**level)])
+        return FourPartLens(U_l, A_lminus1, V_l, D_l)

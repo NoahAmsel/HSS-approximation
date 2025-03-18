@@ -11,7 +11,7 @@ from scipy.sparse.linalg import aslinearoperator as alo, LinearOperator
 import seaborn as sns
 
 from HSS_approx import matvec_alg_resketch, matvec_alg_unified_sketch, matvecs_optimal_core, random_access_greedy_alg, matvec_alg_double_unified_sketch
-from problems import banded_gaussian, factor2_example, factor2_optimal_solution, grid_schur_complement, SparseInverse, star_matrix
+from problems import banded_gaussian, factor2_example, factor2_optimal_solution, grid_schur_complement, SparseInverse, star_matrix, random_hss
 
 
 global_show_title = True
@@ -49,7 +49,7 @@ def theorem_4_1_optimality_ratio(sketches_per_level, rank, levels):
     return 2 * gamma_r * (1 + gamma_d) * levels
 
 
-def plot_sketch_size_vs_error(A, title, methods, num_sketches, non_sketching_methods={}, repeats=1, approx_frobenius=None, savedir=".", xscale="linear"):
+def plot_sketch_size_vs_error(A, title, methods, num_sketches, non_sketching_methods={}, repeats=1, approx_frobenius=None, savedir=".", xscale="log"):
     Anorm = np.linalg.norm(A) if approx_frobenius is None else approx_Frob(A, approx_frobenius)
     def rel_error(A_tilde):
         error = np.linalg.norm(A_tilde.toarray() - A) if approx_frobenius is None else approx_Frob(alo(A_tilde) - A, approx_frobenius)
@@ -79,7 +79,7 @@ def plot_sketch_size_vs_error(A, title, methods, num_sketches, non_sketching_met
     non_sketching_results = {method_name: rel_error(method(A)) for method_name, method in non_sketching_methods.items()}
 
     df = pd.DataFrame(sketching_results)
-    plt.rcParams.update({"text.usetex": True, "font.family": "serif", "font.size": 18, "legend.fontsize": 15})
+    plt.rcParams.update({"text.usetex": True, "font.family": "serif", "font.size": 18, "legend.fontsize": 13})
     fig, axs = plt.subplots(1, 2, sharey=True, figsize=(10, 3.5))
     plt.yscale("log")
     if global_show_title:
@@ -87,7 +87,7 @@ def plot_sketch_size_vs_error(A, title, methods, num_sketches, non_sketching_met
         bbox_to_anchor=(0,0,1,.825)
     else:
         plt.suptitle("\n")
-        bbox_to_anchor=(0,0,1,.92)
+        bbox_to_anchor=(0,0,1,.85)
     for i, (ax, x_col) in enumerate(zip(axs, ["Queries per Sketch", "Total Queries"])):
         # NOTE: This assumes that these non sketching methods are deterministic
         for (method_name, method_result), style in zip(non_sketching_results.items(), ['-.', ':']):
@@ -120,9 +120,9 @@ def schur_gunnar():
     recovery_rank = r
     title = f"Grid Schur Complement:\nn={n},N={N},m={m},k={recovery_rank}"
     methods = {
-        "Fresh Sketches": lambda A, s: matvec_alg_resketch(A, levels, recovery_rank, s),
+        "Fresh Sketches (Alg 4.1)": lambda A, s: matvec_alg_resketch(A, levels, recovery_rank, s),
         "Half Fresh Sketches": lambda A, s: matvec_alg_resketch(A, levels, recovery_rank, s, second_sketch_for_D=False),
-        "Recycled Sketch": lambda A, s: matvec_alg_unified_sketch(A, levels, recovery_rank, s),
+        "Recycled Sketch [LM24a]": lambda A, s: matvec_alg_unified_sketch(A, levels, recovery_rank, s),
     }
     plot_sketch_size_vs_error(
         A,
@@ -145,12 +145,12 @@ def schur_smaller():
 
     title = "Grid Schur Complement:\n" + rf"$N={N},L={levels},k={r}$"
     methods = {
-        "Fresh Sketches": lambda A, s: matvec_alg_resketch(A, levels, r, s),
+        "Fresh Sketches (Alg 4.1)": lambda A, s: matvec_alg_resketch(A, levels, r, s),
         # "Half Fresh Sketches": lambda A, s: matvec_alg_resketch(A, levels, recovery_rank, s, second_sketch_for_D=False),
-        "Recycled Sketch": lambda A, s: matvec_alg_unified_sketch(A, levels, r, s),
+        "Recycled Sketch [LM24a]": lambda A, s: matvec_alg_unified_sketch(A, levels, r, s),
     }
     A = A @ np.eye(*A.shape)
-    non_sketching_methods = {"Random Access": lambda A: random_access_greedy_alg(A, levels, r)}
+    non_sketching_methods = {"Entrywise Access (Alg C.1)": lambda A: random_access_greedy_alg(A, levels, r)}
     min_q = max(3*r, min_queries(A, levels))
     plot_sketch_size_vs_error(
         A,
@@ -170,11 +170,11 @@ def star():
     r = 30
     title = "Boundary Integral Operator\n" + rf"$N = {A.shape[0]}, L={levels}, k={r}$"
     methods = {
-        "Fresh Sketches": lambda A, s: matvec_alg_resketch(A, levels, r, s),
+        "Fresh Sketches (Alg 4.1)": lambda A, s: matvec_alg_resketch(A, levels, r, s),
         # "Half Fresh Sketches": lambda A, s: matvec_alg_resketch(A, levels, r, s, second_sketch_for_D=False),
-        "Recycled Sketch": lambda A, s: matvec_alg_unified_sketch(A, levels, r, s),
+        "Recycled Sketch [LM24a]": lambda A, s: matvec_alg_unified_sketch(A, levels, r, s),
     }
-    non_sketching_methods = {"Random Access": lambda A: random_access_greedy_alg(A, levels, r)}
+    non_sketching_methods = {"Entrywise Access (Alg C.1)": lambda A: random_access_greedy_alg(A, levels, r)}
     min_sketches = max(3*r, min_queries(A, levels))
     plot_sketch_size_vs_error(
         A,
@@ -198,11 +198,11 @@ def banded_inverse(levels, num_diags_above, r=None):
     title = "Banded Matrix\n" + rf"$N = {A.shape[0]}, L = {recovery_levels}, b = {2*num_diags_above + 1}, k = {r}$"
 
     methods = {
-        "Fresh Sketches": lambda A, s: matvec_alg_resketch(A, recovery_levels, r, s),
+        "Fresh Sketches (Alg 4.1)": lambda A, s: matvec_alg_resketch(A, recovery_levels, r, s),
         # "Half Fresh Sketches": lambda A, s: matvec_alg_resketch(A, recovery_levels, r, s, second_sketch_for_D=False),
-        "Recycled Sketch": lambda A, s: matvec_alg_unified_sketch(A, recovery_levels, r, s),
+        "Recycled Sketch [LM24a]": lambda A, s: matvec_alg_unified_sketch(A, recovery_levels, r, s),
     }
-    non_sketching_methods = {"Random Access": lambda A: random_access_greedy_alg(A.toarray(), levels, r)}
+    non_sketching_methods = {"Entrywise Access (Alg C.1)": lambda A: random_access_greedy_alg(A.toarray(), levels, r)}
     min_q = max(3*r, min_queries(A, levels))
     plot_sketch_size_vs_error(
         A,
@@ -222,12 +222,12 @@ def two_factor(level, eps):
     rank = 1
     top_level = 0
     methods = {
-        "Fresh Sketches": lambda A, s: matvec_alg_resketch(A, level, rank, s, top_level=top_level),
+        "Fresh Sketches (Alg 4.1)": lambda A, s: matvec_alg_resketch(A, level, rank, s, top_level=top_level),
         # "Half Fresh Sketches": lambda A, s: matvec_alg_resketch(A, level, rank, s, top_level=top_level, second_sketch_for_D=False),
-        "Recycled Sketch": lambda A, s: matvec_alg_unified_sketch(A, level, rank, s, top_level=top_level),
+        "Recycled Sketch [LM24a]": lambda A, s: matvec_alg_unified_sketch(A, level, rank, s, top_level=top_level),
         # "Double Recycled Sketch": lambda A, s: matvec_alg_double_unified_sketch(A, level, rank, s, top_level=top_level),
     }
-    non_sketching_methods = {"Random Access": lambda A: random_access_greedy_alg(A, level, rank, top_level=top_level), "Optimal": lambda _: factor2_optimal_solution(blocks)}
+    non_sketching_methods = {"Entrywise Access (Alg C.1)": lambda A: random_access_greedy_alg(A, level, rank, top_level=top_level), "Optimal": lambda _: factor2_optimal_solution(blocks)}
     title = "Hard Construction\n" + rf"$N={A.shape[0]},L={level},k={rank},\delta={eps}$"
     min_q = max(3*rank, min_queries(A, level))
     plot_sketch_size_vs_error(
@@ -248,7 +248,7 @@ def spike(A, level: int, rank: int, top_level: int):
     assert A.shape[0] == 2 ** (level+1) * rank
     critical_num_sketches = A.shape[1] // 2**(level - top_level)
     methods = {
-        "Recycled Sketch": lambda A, s: matvec_alg_unified_sketch(A, level, rank, s, top_level=top_level),
+        "Recycled Sketch [LM24a]": lambda A, s: matvec_alg_unified_sketch(A, level, rank, s, top_level=top_level),
         "Double Recycled Sketch": lambda A, s: matvec_alg_double_unified_sketch(A, level, rank, s, top_level=top_level),
     }
     title = f"Spike Due to Pseudoinverse\nN={A.shape[0]},rank={rank},top_level={top_level}"
@@ -282,6 +282,58 @@ def gaussian_spike():
 # diana: take an exact telescoping factorization and just perturb the top level U and V
 
 
+def noisy():
+    level = 7
+    rank = 5
+    HSS = random_hss(level, r=rank, diag_weight=1).toarray()
+    # HSS = HSS + 2 * sp.block_diag([np.random.randn(2*rank, 2*rank) for _ in range(2**level)]).toarray()
+    noise = np.random.randn(*HSS.shape)
+    noise_level = 0  # 1e-3
+    noise *= noise_level * np.linalg.norm(HSS) / np.linalg.norm(noise)
+    A = HSS + noise
+    top_level = 0
+    methods = {
+        # "Fresh 2 side": lambda A, s: matvec_alg_resketch(A, level, rank, s, top_level=top_level),
+        "Recycled 2 side": lambda A, s: matvec_alg_unified_sketch(A, level, rank, s, top_level=top_level, two_sided_pseudoinverse=True),
+        "Fresh": lambda A, s: matvec_alg_resketch(A, level, rank, s, top_level=top_level),
+        "Recycled": lambda A, s: matvec_alg_unified_sketch(A, level, rank, s, top_level=top_level),
+    }
+    title = f"Noisy gaussian"
+    plot_sketch_size_vs_error(
+        A,
+        title,
+        methods,
+        np.geomspace(min_queries(A, level), 4*min_queries(A, level), 10, dtype=int),
+        non_sketching_methods={"Entrywise Access (Alg C.1)": lambda A: random_access_greedy_alg(A, level, rank, top_level=top_level)},
+        repeats=1,
+        savedir="out/noisy",
+    )
+
+
+def error():
+    # TODO! this shows that there's an error in "Recycled 2 side"
+    level = 7
+    rank = 2
+    A = sp.block_diag([np.random.randn(2*rank, 2*rank) for _ in range(2**level)]).toarray()
+    top_level = 0
+    methods = {
+        # "Fresh 2 side": lambda A, s: matvec_alg_resketch(A, level, rank, s, top_level=top_level),
+        "Recycled 2 side": lambda A, s: matvec_alg_unified_sketch(A, level, rank, s, top_level=top_level, two_sided_pseudoinverse=True),
+        "Fresh": lambda A, s: matvec_alg_resketch(A, level, rank, s, top_level=top_level),
+        "Recycled": lambda A, s: matvec_alg_unified_sketch(A, level, rank, s, top_level=top_level),
+    }
+    title = f"Noisy gaussian"
+    plot_sketch_size_vs_error(
+        A,
+        title,
+        methods,
+        np.array([30, 300]),
+        non_sketching_methods={"Entrywise Access (Alg C.1)": lambda A: random_access_greedy_alg(A, level, rank, top_level=top_level)},
+        repeats=1,
+        savedir="out/noisy",
+    )
+
+
 if __name__ == "__main__":
     global_show_title = False
     two_factor(4, 0.1)
@@ -289,6 +341,9 @@ if __name__ == "__main__":
     banded_inverse(levels=12, num_diags_above=8, r=8)
     star()
 
+    # # newer experiments
+    # noisy()
+    # error()
 
     # two_factor(9, 0.1)
     # two_factor(9, 0.01)
@@ -302,7 +357,3 @@ if __name__ == "__main__":
     # banded_inverse(levels=12, num_diags_above=5)
     # banded_inverse(levels=12, num_diags_above=5, r=5)
     # gaussian_spike()
-
-# TODO! Redo everything with a leaf size > 1.
-# The problem is that currently, our algs assume we're going all the way to the diagonal
-# So for the hard case, we want level=1, block size = 2. but it's implicitly assuming level=1 => block size = 4.
