@@ -151,7 +151,7 @@ def schur_smaller():
     }
     A = A @ np.eye(*A.shape)
     non_sketching_methods = {"Entrywise Access (Alg C.1)": lambda A: random_access_greedy_alg(A, levels, r)}
-    min_q = max(3*r, min_queries(A, levels))
+    min_q = max(3*r+2, min_queries(A, levels))
     plot_sketch_size_vs_error(
         A,
         title,
@@ -175,7 +175,7 @@ def star():
         "Recycled Sketch [LM24a]": lambda A, s: matvec_alg_unified_sketch(A, levels, r, s),
     }
     non_sketching_methods = {"Entrywise Access (Alg C.1)": lambda A: random_access_greedy_alg(A, levels, r)}
-    min_sketches = max(3*r, min_queries(A, levels))
+    min_sketches = max(3*r+2, min_queries(A, levels))
     plot_sketch_size_vs_error(
         A,
         title,
@@ -203,7 +203,7 @@ def banded_inverse(levels, num_diags_above, r=None):
         "Recycled Sketch [LM24a]": lambda A, s: matvec_alg_unified_sketch(A, recovery_levels, r, s),
     }
     non_sketching_methods = {"Entrywise Access (Alg C.1)": lambda A: random_access_greedy_alg(A.toarray(), levels, r)}
-    min_q = max(3*r, min_queries(A, levels))
+    min_q = max(3*r+2, min_queries(A, levels))
     plot_sketch_size_vs_error(
         A,
         title,
@@ -229,7 +229,7 @@ def two_factor(level, eps):
     }
     non_sketching_methods = {"Entrywise Access (Alg C.1)": lambda A: random_access_greedy_alg(A, level, rank, top_level=top_level), "Optimal": lambda _: factor2_optimal_solution(blocks)}
     title = "Hard Construction\n" + rf"$N={A.shape[0]},L={level},k={rank},\delta={eps}$"
-    min_q = max(3*rank, min_queries(A, level))
+    min_q = max(3*rank+2, min_queries(A, level))
     plot_sketch_size_vs_error(
         A,
         title,
@@ -285,12 +285,12 @@ def gaussian_spike():
 def noisy():
     level = 7
     rank = 5
-    HSS = random_hss(level, r=rank, diag_weight=1).toarray()
+    HSS = random_hss(level, r=rank, diag_weight=1)
     # HSS = HSS + 2 * sp.block_diag([np.random.randn(2*rank, 2*rank) for _ in range(2**level)]).toarray()
-    noise = np.random.randn(*HSS.shape)
-    noise_level = 0  # 1e-3
-    noise *= noise_level * np.linalg.norm(HSS) / np.linalg.norm(noise)
-    A = HSS + noise
+    noise = (np.eye(*HSS.shape) - HSS.U @ HSS.U.T) @ np.random.randn(*HSS.shape)
+    noise_level = 1e-2
+    noise *= noise_level * np.linalg.norm(HSS.toarray()) / np.linalg.norm(noise)
+    A = np.array(HSS.toarray() + noise)
     top_level = 0
     methods = {
         # "Fresh 2 side": lambda A, s: matvec_alg_resketch(A, level, rank, s, top_level=top_level),
