@@ -62,7 +62,7 @@ def plot_sketch_size_vs_error(A, title, methods, num_sketches, non_sketching_met
         return {
             "Method": method_name,
             "Relative\nFrobenius Error": error,
-            "Queries per Sketch": sketch_dim,
+            "Sketch Size ($s$)": sketch_dim,
             "Total Queries": wrapped_A.total_queries(),
         }
 
@@ -88,14 +88,14 @@ def plot_sketch_size_vs_error(A, title, methods, num_sketches, non_sketching_met
     else:
         plt.suptitle("\n")
         bbox_to_anchor=(0,0,1,.85)
-    for i, (ax, x_col) in enumerate(zip(axs, ["Queries per Sketch", "Total Queries"])):
+    for i, (ax, x_col) in enumerate(zip(axs, ["Sketch Size ($s$)", "Total Queries"])):
         # NOTE: This assumes that these non sketching methods are deterministic
         for (method_name, method_result), style in zip(non_sketching_results.items(), ['-.', ':']):
             ax.axhline(method_result, label=method_name, color='black', linestyle=style)
         p = sns.lineplot(df, x=x_col, y="Relative\nFrobenius Error", hue="Method", style="Method", errorbar=("ci", 100), marker='o', ax=ax, legend=(i == 1))
         ax.set_xscale(xscale)
         if i == 1:
-            # fuller_grid = np.geomspace(df["Queries per Sketch"].min(), df["Queries per Sketch"].max(), num=100)
+            # fuller_grid = np.geomspace(df["Sketch Size ($s$)"].min(), df["Sketch Size ($s$)"].max(), num=100)
             # ax.plot(fuller_grid, method_result * theorem_4_1_optimality_ratio(fuller_grid, rank=RANK, levels=LEVELS), color='black', linestyle=style)
             handles, labels = ax.get_legend_handles_labels()
             ax.get_legend().remove()
@@ -122,7 +122,7 @@ def schur_gunnar():
     methods = {
         "Fresh Sketches (Alg 4.1)": lambda A, s: matvec_alg_resketch(A, levels, recovery_rank, s),
         "Half Fresh Sketches": lambda A, s: matvec_alg_resketch(A, levels, recovery_rank, s, second_sketch_for_D=False),
-        "Recycled Sketch [LM24a]": lambda A, s: matvec_alg_unified_sketch(A, levels, recovery_rank, s),
+        "Reused Sketch [LM24a]": lambda A, s: matvec_alg_unified_sketch(A, levels, recovery_rank, s),
     }
     plot_sketch_size_vs_error(
         A,
@@ -147,16 +147,17 @@ def schur_smaller():
     methods = {
         "Fresh Sketches (Alg 4.1)": lambda A, s: matvec_alg_resketch(A, levels, r, s),
         # "Half Fresh Sketches": lambda A, s: matvec_alg_resketch(A, levels, recovery_rank, s, second_sketch_for_D=False),
-        "Recycled Sketch [LM24a]": lambda A, s: matvec_alg_unified_sketch(A, levels, r, s),
+        "Reused Sketch QR [LM24a]": lambda A, s: matvec_alg_unified_sketch(A, levels, r, s, use_qr=True),
+        "Reused Sketch SVD": lambda A, s: matvec_alg_unified_sketch(A, levels, r, s, use_qr=False),
     }
     A = A @ np.eye(*A.shape)
-    non_sketching_methods = {"Entrywise Access (Alg C.1)": lambda A: random_access_greedy_alg(A, levels, r)}
+    non_sketching_methods = {"Entrywise Access": lambda A: random_access_greedy_alg(A, levels, r)}
     min_q = max(3*r+2, min_queries(A, levels))
     plot_sketch_size_vs_error(
         A,
         title,
         methods,
-        np.linspace(min_q, 4*min_q, 20, endpoint=True, dtype=int),
+        np.geomspace(min_q, 20 * min_q, 20, endpoint=True, dtype=int),
         non_sketching_methods=non_sketching_methods,
         repeats=10,
         approx_frobenius=None,
@@ -172,15 +173,16 @@ def star():
     methods = {
         "Fresh Sketches (Alg 4.1)": lambda A, s: matvec_alg_resketch(A, levels, r, s),
         # "Half Fresh Sketches": lambda A, s: matvec_alg_resketch(A, levels, r, s, second_sketch_for_D=False),
-        "Recycled Sketch [LM24a]": lambda A, s: matvec_alg_unified_sketch(A, levels, r, s),
+        "Reused Sketch QR [LM24a]": lambda A, s: matvec_alg_unified_sketch(A, levels, r, s, use_qr=True),
+        "Reused Sketch SVD": lambda A, s: matvec_alg_unified_sketch(A, levels, r, s, use_qr=False),
     }
-    non_sketching_methods = {"Entrywise Access (Alg C.1)": lambda A: random_access_greedy_alg(A, levels, r)}
+    non_sketching_methods = {"Entrywise Access": lambda A: random_access_greedy_alg(A, levels, r)}
     min_sketches = max(3*r+2, min_queries(A, levels))
     plot_sketch_size_vs_error(
         A,
         title,
         methods,
-        np.linspace(min_sketches, 4 * min_sketches, 20, endpoint=True, dtype=int),
+        np.geomspace(min_sketches, 20 * min_sketches, 20, endpoint=True, dtype=int),
         non_sketching_methods=non_sketching_methods,
         repeats=10,
         savedir="out/star",
@@ -200,15 +202,16 @@ def banded_inverse(levels, num_diags_above, r=None):
     methods = {
         "Fresh Sketches (Alg 4.1)": lambda A, s: matvec_alg_resketch(A, recovery_levels, r, s),
         # "Half Fresh Sketches": lambda A, s: matvec_alg_resketch(A, recovery_levels, r, s, second_sketch_for_D=False),
-        "Recycled Sketch [LM24a]": lambda A, s: matvec_alg_unified_sketch(A, recovery_levels, r, s),
+        "Reused Sketch QR [LM24a]": lambda A, s: matvec_alg_unified_sketch(A, recovery_levels, r, s, use_qr=True),
+        "Reused Sketch SVD": lambda A, s: matvec_alg_unified_sketch(A, recovery_levels, r, s, use_qr=False),
     }
-    non_sketching_methods = {"Entrywise Access (Alg C.1)": lambda A: random_access_greedy_alg(A.toarray(), levels, r)}
+    non_sketching_methods = {"Entrywise Access": lambda A: random_access_greedy_alg(A.toarray(), levels, r)}
     min_q = max(3*r+2, min_queries(A, levels))
     plot_sketch_size_vs_error(
         A,
         title,
         methods,
-        np.linspace(min_q, 4 * min_q, 20, endpoint=True, dtype=int),
+        np.geomspace(min_q, 20 * min_q, 20, endpoint=True, dtype=int),
         non_sketching_methods=non_sketching_methods,
         repeats=10,
         approx_frobenius=int(1e3),
@@ -224,21 +227,21 @@ def two_factor(level, eps):
     methods = {
         "Fresh Sketches (Alg 4.1)": lambda A, s: matvec_alg_resketch(A, level, rank, s, top_level=top_level),
         # "Half Fresh Sketches": lambda A, s: matvec_alg_resketch(A, level, rank, s, top_level=top_level, second_sketch_for_D=False),
-        "Recycled Sketch [LM24a]": lambda A, s: matvec_alg_unified_sketch(A, level, rank, s, top_level=top_level),
+        "Reused Sketch QR [LM24a]": lambda A, s: matvec_alg_unified_sketch(A, level, rank, s, top_level=top_level, use_qr=True),
+        "Reused Sketch SVD": lambda A, s: matvec_alg_unified_sketch(A, level, rank, s, top_level=top_level, use_qr=False),
         # "Double Recycled Sketch": lambda A, s: matvec_alg_double_unified_sketch(A, level, rank, s, top_level=top_level),
     }
-    non_sketching_methods = {"Entrywise Access (Alg C.1)": lambda A: random_access_greedy_alg(A, level, rank, top_level=top_level), "Optimal": lambda _: factor2_optimal_solution(blocks)}
+    non_sketching_methods = {"Entrywise Access": lambda A: random_access_greedy_alg(A, level, rank, top_level=top_level), "Optimal": lambda _: factor2_optimal_solution(blocks)}
     title = "Hard Construction\n" + rf"$N={A.shape[0]},L={level},k={rank},\delta={eps}$"
     min_q = max(3*rank+2, min_queries(A, level))
     plot_sketch_size_vs_error(
         A,
         title,
         methods,
-        np.geomspace(min_q, 96 * min_q, 20, endpoint=True, dtype=int),
+        np.geomspace(min_q, 10 * 96 * min_q, 20, endpoint=True, dtype=int),
         non_sketching_methods=non_sketching_methods,
         repeats=10,
         savedir="out/two_factor",
-        xscale="log",
     )
 
 
@@ -248,7 +251,7 @@ def spike(A, level: int, rank: int, top_level: int):
     assert A.shape[0] == 2 ** (level+1) * rank
     critical_num_sketches = A.shape[1] // 2**(level - top_level)
     methods = {
-        "Recycled Sketch [LM24a]": lambda A, s: matvec_alg_unified_sketch(A, level, rank, s, top_level=top_level),
+        "Reused Sketch [LM24a]": lambda A, s: matvec_alg_unified_sketch(A, level, rank, s, top_level=top_level),
         "Double Recycled Sketch": lambda A, s: matvec_alg_double_unified_sketch(A, level, rank, s, top_level=top_level),
     }
     title = f"Spike Due to Pseudoinverse\nN={A.shape[0]},rank={rank},top_level={top_level}"
@@ -304,7 +307,7 @@ def noisy():
         title,
         methods,
         np.geomspace(min_queries(A, level), 4*min_queries(A, level), 10, dtype=int),
-        non_sketching_methods={"Entrywise Access (Alg C.1)": lambda A: random_access_greedy_alg(A, level, rank, top_level=top_level)},
+        non_sketching_methods={"Entrywise Access": lambda A: random_access_greedy_alg(A, level, rank, top_level=top_level)},
         repeats=1,
         savedir="out/noisy",
     )
@@ -322,13 +325,13 @@ def error():
         "Fresh": lambda A, s: matvec_alg_resketch(A, level, rank, s, top_level=top_level),
         "Recycled": lambda A, s: matvec_alg_unified_sketch(A, level, rank, s, top_level=top_level),
     }
-    title = f"Noisy gaussian"
+    title = f"error??"
     plot_sketch_size_vs_error(
         A,
         title,
         methods,
         np.array([30, 300]),
-        non_sketching_methods={"Entrywise Access (Alg C.1)": lambda A: random_access_greedy_alg(A, level, rank, top_level=top_level)},
+        non_sketching_methods={"Entrywise Access": lambda A: random_access_greedy_alg(A, level, rank, top_level=top_level)},
         repeats=1,
         savedir="out/noisy",
     )

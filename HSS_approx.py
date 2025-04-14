@@ -1,6 +1,7 @@
 from itertools import accumulate
 import numpy as np
 import operator
+import scipy.linalg
 import scipy.sparse as sp
 from scipy.sparse.linalg import aslinearoperator as alo, LinearOperator
 from scipy.sparse.linalg._interface import IdentityOperator
@@ -130,7 +131,7 @@ def two_sided_lstsq(Omega1, AOmega1, Omega2, ATOmega2):
         np.kron(Omega1.T, np.eye(AOmega1.shape[0])),
         np.kron(np.eye(ATOmega2.shape[0]), Omega2.T),
     ))
-    RHS = np.concat((
+    RHS = np.concatenate((
         vec(AOmega1),
         vec(ATOmega2.T),
     ))
@@ -146,7 +147,7 @@ def two_sided_iterative(Omega1, AOmega1, Omega2, ATOmega2):
     def unvec(x, num_rows): return x.reshape(len(x) // num_rows, num_rows).T
     def matvec(vec_a):
         A = unvec(vec_a, AOmega1.shape[0])
-        return np.concat((
+        return np.concatenate((
             vec(A @ Omega1),
             vec(Omega2.T @ A),
         ))
@@ -155,7 +156,7 @@ def two_sided_iterative(Omega1, AOmega1, Omega2, ATOmega2):
         mat2 = unvec(v[Arows * s1:], s2)
         return vec(mat1 @ Omega1.T) + vec(Omega2 @ mat2)
     LHS = LinearOperator(shape=(Arows * s1 + Acols * s2, Arows * Acols), matvec=matvec, rmatvec=rmatvec)
-    RHS = np.concat((
+    RHS = np.concatenate((
         vec(AOmega1),
         vec(ATOmega2.T),
     ))
@@ -193,7 +194,7 @@ def blockwise_right_pseudoinv(X, Y, level):
 #     return FourPartLens(U_l, A_lminus1, V_l, D_l)
 
 
-def matvec_alg_unified_sketch(A, level: int, r: int, num_sketches:int, top_level: int = 0, two_sided_pseudoinverse: bool = False):
+def matvec_alg_unified_sketch(A, level: int, r: int, num_sketches:int, top_level: int = 0, two_sided_pseudoinverse: bool = False, use_qr: bool = False):
     left_Omega = np.random.randn(A.shape[0], num_sketches)
     right_Omega = np.random.randn(A.shape[1], num_sketches)
     A_right_Omega = A @ right_Omega
@@ -201,35 +202,45 @@ def matvec_alg_unified_sketch(A, level: int, r: int, num_sketches:int, top_level
     return matvec_alg_double_unified_sketch_helper(
         right_Omega, A_right_Omega, left_Omega, AT_left_Omega,
         right_Omega, A_right_Omega, left_Omega, AT_left_Omega,
-        level, r, top_level=top_level, two_sided_pseudoinverse=two_sided_pseudoinverse
+        level, r, top_level=top_level, two_sided_pseudoinverse=two_sided_pseudoinverse,
+        use_qr=use_qr
     )
 
 
-def matvec_alg_double_unified_sketch_helper(Omega1, AOmega1, Omega2, ATOmega2, tilde_Omega1, tilde_AOmega1, tilde_Omega2, tilde_ATOmega2, level: int, r: int, top_level: int, two_sided_pseudoinverse: bool = False):
+def matvec_alg_double_unified_sketch_helper(Omega1, AOmega1, Omega2, ATOmega2, tilde_Omega1, tilde_AOmega1, tilde_Omega2, tilde_ATOmega2, level: int, r: int, top_level: int, two_sided_pseudoinverse: bool, use_qr: bool):
     if level == top_level:
         if two_sided_pseudoinverse:
-            return two_sided_iterative(tilde_Omega1, tilde_AOmega1, tilde_Omega2, tilde_ATOmega2)
+            # return two_sided_iterative(tilde_Omega1, tilde_AOmega1, tilde_Omega2, tilde_ATOmega2)
+            return two_sided_lstsq(tilde_Omega1, tilde_AOmega1, tilde_Omega2, tilde_ATOmega2)
         else:
             return right_pseudoinv(tilde_AOmega1, tilde_Omega1)
-    U_l_list = [np.linalg.svd(rowblock(AOmega1, level, block_i) @ row_nullifier(Omega1, level, block_i), full_matrices=False).U[:, :r] for block_i in range(2**level)]
+    if use_qr:
+        def topcols(XX): return scipy.linalg.qr(XX, mode="economic", pivoting=True)[0][:, :r]
+    else:
+        def topcols(XX): return np.linalg.svd(XX, full_matrices=False).U[:, :r]
+    U_l_list = [topcols(rowblock(AOmega1, level, block_i) @ row_nullifier(Omega1, level, block_i)) for block_i in range(2**level)]
     U_l = sp.block_diag(U_l_list)
-    V_l_list = [np.linalg.svd(rowblock(ATOmega2, level, block_i) @ row_nullifier(Omega2, level, block_i), full_matrices=False).U[:, :r] for block_i in range(2**level)]
+    V_l_list = [topcols(rowblock(ATOmega2, level, block_i) @ row_nullifier(Omega2, level, block_i)) for block_i in range(2**level)]
     V_l = sp.block_diag(V_l_list)
     if two_sided_pseudoinverse:
         # TODO! instead of this diagonal recovery, do a two sided least squares solve to recover the diagonal blocks.
         # each block is a pretty small least squares problem
         # then just find D - UU^T D VV^T explicitly
         # to see the effect in the experiments, just try adding some huge random entries on the diagonal blocks
-        Uorth_list = [IdentityOperator((U_l_i.shape[0], U_l_i.shape[0])) - alo(U_l_i) @ alo(U_l_i).T for U_l_i in U_l_list]
-        Vorth_list = [IdentityOperator((V_l_i.shape[0], V_l_i.shape[0])) - alo(V_l_i) @ alo(V_l_i).T for V_l_i in V_l_list]
-        # approx_A_ll = sp.block_diag([
-        #     two_sided_iterative(rowblock(tilde_Omega1, level, block_i), rowblock(tilde_AOmega1, level, block_i), rowblock(tilde_Omega2, level, block_i), rowblock(tilde_ATOmega2, level, block_i))
-        #     for block_i in range(2**level)
-        # ])
         approx_A_ll = sp.block_diag([
-            two_sided_lstsq(rowblock(tilde_Omega1, level, block_i), Uorth_list[block_i] @ rowblock(tilde_AOmega1, level, block_i), rowblock(tilde_Omega2, level, block_i), Vorth_list[block_i] @ rowblock(tilde_ATOmega2, level, block_i))
+            two_sided_lstsq(rowblock(tilde_Omega1, level, block_i), rowblock(tilde_AOmega1, level, block_i), rowblock(tilde_Omega2, level, block_i), rowblock(tilde_ATOmega2, level, block_i))
             for block_i in range(2**level)
         ])
+        # Uorth_list = [IdentityOperator((U_l_i.shape[0], U_l_i.shape[0])) - alo(U_l_i) @ alo(U_l_i).T for U_l_i in U_l_list]
+        # Vorth_list = [IdentityOperator((V_l_i.shape[0], V_l_i.shape[0])) - alo(V_l_i) @ alo(V_l_i).T for V_l_i in V_l_list]
+        # approx_A_ll = sp.block_diag([
+        #     two_sided_lstsq(rowblock(tilde_Omega1, level, block_i), Uorth_list[block_i] @ rowblock(tilde_AOmega1, level, block_i), rowblock(tilde_Omega2, level, block_i), Vorth_list[block_i] @ rowblock(tilde_ATOmega2, level, block_i))
+        #     for block_i in range(2**level)
+        # ])
+        # approx_A_ll = sp.block_diag([
+        #     two_sided_lstsq(rowblock(tilde_Omega1, level, block_i), Uorth_list[block_i] @ rowblock(tilde_AOmega1, level, block_i), rowblock(tilde_Omega2, level, block_i), Vorth_list[block_i] @ rowblock(tilde_ATOmega2, level, block_i))
+        #     for block_i in range(2**level)
+        # ])
         D_l = approx_A_ll - U_l @ ((U_l.T @ approx_A_ll) @ V_l) @ V_l.T
     else:
         Dpart1 = blockwise_right_pseudoinv(tilde_AOmega1 - U_l @ (U_l.T @ tilde_AOmega1), tilde_Omega1, level)
@@ -243,7 +254,7 @@ def matvec_alg_double_unified_sketch_helper(Omega1, AOmega1, Omega2, ATOmega2, t
     new_tilde_AOmega1 = U_l.T @ (tilde_AOmega1 - D_l @ tilde_Omega1)
     new_tilde_Omega2 = U_l.T @ tilde_Omega2
     new_tilde_ATOmega2 = V_l.T @ (tilde_ATOmega2 - D_l.T @ tilde_Omega2)
-    A_lminus1 = matvec_alg_double_unified_sketch_helper(newOmega1, newAOmega1, newOmega2, newATOmega2, new_tilde_Omega1, new_tilde_AOmega1, new_tilde_Omega2, new_tilde_ATOmega2, level-1, r, top_level)
+    A_lminus1 = matvec_alg_double_unified_sketch_helper(newOmega1, newAOmega1, newOmega2, newATOmega2, new_tilde_Omega1, new_tilde_AOmega1, new_tilde_Omega2, new_tilde_ATOmega2, level-1, r, top_level, two_sided_pseudoinverse, use_qr)
     return FourPartLens(U_l, A_lminus1, V_l, D_l)
 
 
@@ -255,7 +266,7 @@ def matvec_alg_double_unified_sketch(A, level: int, r: int, num_sketches:int, to
     return matvec_alg_double_unified_sketch_helper(
         right_Omega, A @ right_Omega, left_Omega, A.T @ left_Omega,
         tilde_right_Omega, A @ tilde_right_Omega, tilde_left_Omega, A.T @ tilde_left_Omega,
-        level, r, top_level=top_level, two_sided_pseudoinverse=two_sided_pseudoinverse
+        level, r, top_level=top_level, two_sided_pseudoinverse=two_sided_pseudoinverse, use_qr=False
     )
 
 
@@ -285,7 +296,7 @@ def matvec_alg_resketch(A, level: int, r: int, num_sketches_per_level: int, top_
         Dpart1 = blockwise_right_pseudoinv(AOmega1 - U_l @ (U_l.T @ AOmega1), Omega1, level)
         Dpart2 = U_l @ (U_l.T @ blockwise_right_pseudoinv(ATOmega2 - V_l @ (V_l.T @ ATOmega2), Omega2, level).T)
     D_l = Dpart1 + Dpart2
-    A_lminus1 = matvec_alg_resketch(alo(U_l).T @ (alo(A) - alo(D_l)) @ alo(V_l), level-1, r, num_sketches_per_level, top_level=top_level)
+    A_lminus1 = matvec_alg_resketch(alo(U_l).T @ (alo(A) - alo(D_l)) @ alo(V_l), level-1, r, num_sketches_per_level, top_level=top_level, second_sketch_for_D=second_sketch_for_D)
     return FourPartLens(U_l, A_lminus1, V_l, D_l)
 
 
