@@ -80,26 +80,14 @@ def plot_sketch_size_vs_error(A, title, methods, num_sketches, non_sketching_met
 
     df = pd.DataFrame(sketching_results)
     plt.rcParams.update({"text.usetex": True, "font.family": "serif", "font.size": 18, "legend.fontsize": 13})
-    fig, axs = plt.subplots(1, 2, sharey=True, figsize=(10, 3.5))
+    fig, axs = plt.subplots(1, 2, sharey=True, figsize=(10, 3))
     plt.yscale("log")
-    if global_show_title:
-        plt.suptitle(title + "\n")
-        bbox_to_anchor=(0,0,1,.825)
-    else:
-        plt.suptitle("\n")
-        bbox_to_anchor=(0,0,1,.85)
     for i, (ax, x_col) in enumerate(zip(axs, ["Sketch Size ($s$)", "Total Queries"])):
         # NOTE: This assumes that these non sketching methods are deterministic
         for (method_name, method_result), style in zip(non_sketching_results.items(), ['-.', ':']):
             ax.axhline(method_result, label=method_name, color='black', linestyle=style)
-        p = sns.lineplot(df, x=x_col, y="Relative\nFrobenius Error", hue="Method", style="Method", errorbar=("ci", 100), marker='o', ax=ax, legend=(i == 1))
+        p = sns.lineplot(df, x=x_col, y="Relative\nFrobenius Error", hue="Method", style="Method", errorbar=("ci", 100), markers=True, ax=ax, legend=False)
         ax.set_xscale(xscale)
-        if i == 1:
-            # fuller_grid = np.geomspace(df["Sketch Size ($s$)"].min(), df["Sketch Size ($s$)"].max(), num=100)
-            # ax.plot(fuller_grid, method_result * theorem_4_1_optimality_ratio(fuller_grid, rank=RANK, levels=LEVELS), color='black', linestyle=style)
-            handles, labels = ax.get_legend_handles_labels()
-            ax.get_legend().remove()
-            plt.figlegend(handles, labels, loc='outside upper center', bbox_to_anchor=bbox_to_anchor, ncol=len(methods)+len(non_sketching_methods), labelspacing=0.)
     Path(savedir).mkdir(parents=True, exist_ok=True)
     plt.tight_layout()
     fig.get_figure().savefig(Path(savedir) / f"{title.translate(str.maketrans({'\n': '', '$': '', '\\': ''}))}.pdf", dpi=600)
